@@ -39,7 +39,10 @@ const RELEASE_ASSETS = Object.freeze([
   Object.freeze({ suffix: ".darwin.x64", targets: TARGET_ALIASES.darwin }),
   Object.freeze({ suffix: ".win32.x64", targets: TARGET_ALIASES.win32 }),
   // Generic fallback for manual installs and FlexDesigner versions without OS-specific lookup.
-  Object.freeze({ suffix: "", targets: DESKTOP_TARGETS }),
+  // ".all" sorts before ".darwin"/".win32": GitHub lists release assets by name, not upload
+  // order, and older FlexDesigner versions take the first .flexplugin. It matches none of
+  // FlexDesigner's <os>.<arch> patterns.
+  Object.freeze({ suffix: ".all", targets: DESKTOP_TARGETS }),
 ]);
 
 function releaseAssetFileName(uuid, asset) {

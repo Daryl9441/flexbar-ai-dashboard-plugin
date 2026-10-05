@@ -46,7 +46,7 @@ test("bundled plugin ships native canvas binaries matching @napi-rs/canvas", () 
   }
 });
 
-test("release workflow uploads the generic asset first, then the platform assets packed by release:pack", () => {
+test("release workflow uploads the universal asset and the platform assets packed by release:pack", () => {
   const workflow = fs.readFileSync(path.join(__dirname, "..", ".github", "workflows", "release.yml"), "utf8");
   const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8"));
   const manifest = JSON.parse(
@@ -65,7 +65,8 @@ test("release workflow uploads the generic asset first, then the platform assets
   const uploads = steps.filter((step) => /uses: softprops\/action-gh-release@v2/.test(step));
   const uploaded = (step) => [...step.matchAll(/dist\/(\S+\.flexplugin)/g)].map((match) => match[1]);
   const names = RELEASE_ASSETS.map((asset) => releaseAssetFileName(manifest.uuid, asset));
-  const generic = `${manifest.uuid}.flexplugin`;
+  const generic = `${manifest.uuid}.all.flexplugin`;
+  assert.equal([...names].sort()[0], generic, "GitHub lists assets by name: the universal one sorts first");
 
   assert.equal(uploads.length, 2);
   assert.deepEqual(uploaded(uploads[0]), [generic]);

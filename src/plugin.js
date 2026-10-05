@@ -142,7 +142,7 @@ plugin.on("ui.message", async (payload) => {
   }
 
   if (payload && payload.type === "recentProjects") {
-    return listRecentProjectPaths(latestSnapshot || await collectRecentProjectsSnapshot());
+    return listRecentProjectPaths(isFreshSnapshot(latestSnapshot) ? latestSnapshot : await collectRecentProjectsSnapshot());
   }
 
   if (payload && payload.type === "claudeBridgeStatus") {
@@ -450,11 +450,11 @@ async function handleKeyInteraction(payload) {
   }
 
   if (key.cid === NEW_SESSION_CID) {
-    const result = await openNewCodexSession(newSessionConfigFromKey(keyForAction(key)));
+    const result = await openNewCodexSession(newSessionConfigFromKey(keyWithCachedDefaults(key)));
     if (!result.ok) logger.warn("Failed to open new Codex session:", result);
     notify(
       serialNumber,
-      result.ok ? t(currentLanguage, "newSessionOpened") : t(currentLanguage, "newSessionFailed"),
+      t(currentLanguage, newSessionMessageKey(result)),
       result.ok ? "success" : "error"
     );
     return;
@@ -505,6 +505,12 @@ function hasSnapshotKeys() {
     if (item.type !== "newSession") return true;
   }
   return false;
+}
+
+// latestSnapshot stops updating once only New Codex Session keys remain.
+function isFreshSnapshot(snapshot) {
+  const collectedAt = Date.parse(snapshot && snapshot.collectedAt);
+  return Number.isFinite(collectedAt) && Date.now() - collectedAt < 60_000;
 }
 
 async function collectRecentProjectsSnapshot() {
@@ -808,6 +814,33 @@ function snackbarText(value) {
     result += char;
   }
   return `${result}...`;
+}
+
+// Unlike keyForAction, the pressed key's own settings win; the cached
+// plugin.alive copy only fills in what the tap payload leaves out.
+function newSessionMessageKey(result) {
+  if (result.ok) return "newSessionOpened";
+  if (result.reason === "invalidProject") return "newSessionBadFolder";
+  if (result.reason === "promptTooLong") return "newSessionPromptTooLong";
+  return "newSessionFailed";
+}
+
+function keyWithCachedDefaults(key) {
+  if (!key || key.uid === undefined || key.uid === null) return key;
+  const cached = keyData[key.uid];
+  if (!cached) return key;
+  return {
+    ...cached,
+    ...key,
+    data: {
+      ...(cached.data || {}),
+      ...(key.data || {}),
+    },
+    config: {
+      ...(cached.config || {}),
+      ...(key.config || {}),
+    },
+  };
 }
 
 function keyForAction(key) {

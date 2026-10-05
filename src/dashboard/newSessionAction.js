@@ -8,6 +8,8 @@ const { execFile } = require("node:child_process");
 const CODEX_NEW_THREAD_URL = "codex://threads/new";
 const CODEX_APP_MODES = ["codex", "work", "chat"];
 const DEFAULT_CODEX_APP_MODE = "codex";
+// ShellExecute on Windows has historically rejected URLs longer than ~2083 chars.
+const WINDOWS_MAX_URL_LENGTH = 2000;
 
 function normalizeCodexAppMode(value) {
   const mode = String(value || "").trim().toLowerCase();
@@ -69,14 +71,17 @@ async function openNewCodexSession(options = {}) {
   try {
     url = buildCodexNewThreadUrl(options);
   } catch (error) {
-    return { ok: false, error: error.message };
+    return { ok: false, reason: "invalidProject", error: error.message };
+  }
+  if (platform === "win32" && url.length > WINDOWS_MAX_URL_LENGTH) {
+    return { ok: false, reason: "promptTooLong", url, error: `URL is ${url.length} characters` };
   }
 
   try {
     await run(createOpenUrlCommand(url, platform));
     return { ok: true, url };
   } catch (error) {
-    return { ok: false, url, error: error && error.message || String(error) };
+    return { ok: false, reason: "openFailed", url, error: error && error.message || String(error) };
   }
 }
 
@@ -118,6 +123,7 @@ function runCommand(command) {
 module.exports = {
   CODEX_APP_MODES,
   DEFAULT_CODEX_APP_MODE,
+  WINDOWS_MAX_URL_LENGTH,
   buildCodexNewThreadUrl,
   createOpenUrlCommand,
   listRecentProjectPaths,

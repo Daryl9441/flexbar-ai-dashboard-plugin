@@ -89,3 +89,12 @@ test("plugin event adapter reads new session config from nested key data", () =>
   }), { projectPath: "/b", prompt: "", mode: "work" });
   assert.deepEqual(newSessionConfigFromKey(null), { projectPath: "", prompt: "", mode: "" });
 });
+
+test("plugin event adapter reads new session config saved at the key's top level", () => {
+  assert.deepEqual(newSessionConfigFromKey({
+    projectPath: "/Users/me/new",
+    prompt: "Hi",
+    mode: "work",
+    data: { projectPath: "/Users/me/old" },
+  }), { projectPath: "/Users/me/new", prompt: "Hi", mode: "work" });
+});

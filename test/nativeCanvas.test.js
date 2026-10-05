@@ -388,8 +388,13 @@ test("release assets follow FlexDesigner's <os>.<arch> naming and work whichever
     "com.aspen.flexbar-ai-dashboard.darwin.arm64.flexplugin",
     "com.aspen.flexbar-ai-dashboard.darwin.x64.flexplugin",
     "com.aspen.flexbar-ai-dashboard.win32.x64.flexplugin",
-    "com.aspen.flexbar-ai-dashboard.flexplugin",
+    "com.aspen.flexbar-ai-dashboard.all.flexplugin",
   ]);
+
+  // GitHub lists release assets by name; the universal one must come first for
+  // FlexDesigner versions that install the first .flexplugin.
+  const byName = assets.map((asset) => asset.name).sort();
+  assert.equal(byName[0], "com.aspen.flexbar-ai-dashboard.all.flexplugin");
 
   // Patterns FlexDesigner 2.2.x matches release assets against (os aliases first, then os + exact arch).
   const osAliases = { darwin: ["darwin", "mac", "macos", "osx"], win32: ["win32", "windows", "win"] };
@@ -426,7 +431,7 @@ test("release packing runs plugin:pack once per target set and copies duplicate 
     [`${UUID}.darwin.arm64.flexplugin`, "darwin-arm64,darwin-x64"],
     [`${UUID}.darwin.x64.flexplugin`, "darwin-arm64,darwin-x64"],
     [`${UUID}.win32.x64.flexplugin`, "win32-x64"],
-    [`${UUID}.flexplugin`, "darwin-arm64,darwin-x64,win32-x64"],
+    [`${UUID}.all.flexplugin`, "darwin-arm64,darwin-x64,win32-x64"],
   ]);
   assert.deepEqual(fs.readdirSync(outDir).sort(), files.map((item) => path.basename(item.file)).sort());
   assert.deepEqual(
@@ -447,7 +452,7 @@ test("release packing fails loudly when an asset ships config.json", (t) => {
     () => packRelease({ projectDir, outDir, uuid: UUID, runNpm: fakePluginPack(projectDir, [], { extraFiles: { "config.json": "{}" } }) }),
     (error) => {
       assert.match(error.message, new RegExp(`${UUID}\\.darwin\\.arm64\\.flexplugin contains config\\.json; the plugin config must not be shipped`));
-      assert.match(error.message, new RegExp(`${UUID}\\.flexplugin contains config\\.json`));
+      assert.match(error.message, new RegExp(`${UUID}\\.all\\.flexplugin contains config\\.json`));
       return true;
     }
   );

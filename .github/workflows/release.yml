@@ -35,7 +35,7 @@ jobs:
       #   com.aspen.flexbar-ai-dashboard.darwin.arm64.flexplugin  macOS arm64 + x64
       #   com.aspen.flexbar-ai-dashboard.darwin.x64.flexplugin    macOS arm64 + x64
       #   com.aspen.flexbar-ai-dashboard.win32.x64.flexplugin     Windows x64
-      #   com.aspen.flexbar-ai-dashboard.flexplugin               all of the above (generic fallback)
+      #   com.aspen.flexbar-ai-dashboard.all.flexplugin           all of the above (universal fallback)
       # FlexDesigner picks the <os>.<arch> asset matching the user's machine.
       - name: Build and pack platform plugins
         run: npm run release:pack
@@ -52,12 +52,13 @@ jobs:
           done
 
       # FlexDesigner versions without <os>.<arch> lookup install the first
-      # .flexplugin of the release, so the generic one is uploaded first, alone.
+      # .flexplugin of the release. GitHub lists assets by name, not upload order,
+      # so the universal asset is named ".all" to sort first.
       - name: Upload generic release asset
         uses: softprops/action-gh-release@v2
         with:
           fail_on_unmatched_files: true
-          files: dist/com.aspen.flexbar-ai-dashboard.flexplugin
+          files: dist/com.aspen.flexbar-ai-dashboard.all.flexplugin
 
       - name: Upload platform release assets
         uses: softprops/action-gh-release@v2

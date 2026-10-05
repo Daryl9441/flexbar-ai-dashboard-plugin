@@ -121,7 +121,7 @@ function rootConfigFromKey(key) {
   if (!key || typeof key !== "object" || Array.isArray(key)) return {};
 
   const config = {};
-  for (const name of ["dataSource", "sessionTitleMode", "titleMode", "tokenDisplayMode"]) {
+  for (const name of ["dataSource", "sessionTitleMode", "titleMode", "tokenDisplayMode", "mode", "projectPath", "prompt"]) {
     if (Object.prototype.hasOwnProperty.call(key, name)) {
       config[name] = key[name];
     }

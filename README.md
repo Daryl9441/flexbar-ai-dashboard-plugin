@@ -69,7 +69,7 @@ Each GitHub release has one `.flexplugin` per platform, each bundling the matchi
 | `com.aspen.flexbar-ai-dashboard.darwin.arm64.flexplugin` | macOS arm64 + x64 |
 | `com.aspen.flexbar-ai-dashboard.darwin.x64.flexplugin` | macOS arm64 + x64 |
 | `com.aspen.flexbar-ai-dashboard.win32.x64.flexplugin` | Windows x64 |
-| `com.aspen.flexbar-ai-dashboard.flexplugin` | generic: all three |
+| `com.aspen.flexbar-ai-dashboard.all.flexplugin` | universal: all three |
 
 ### Prerequisites (building from source)
 
@@ -233,7 +233,7 @@ Artifacts:
 - Backend entry: `com.aspen.flexbar-ai-dashboard.plugin/backend/plugin.cjs`
 - Packed file: `com.aspen.flexbar-ai-dashboard.flexplugin`
 
-Releases: pushing a `v*` tag runs `.github/workflows/release.yml`, which calls `npm run release:pack` (`scripts/pack-release.cjs`: one `npm run plugin:pack` per asset with the matching `FLEX_TARGET`), checks the assets with `node scripts/pack-release.cjs --verify dist` (each must bundle exactly its native canvas packages with all their files, and no `config.json`), and uploads the assets listed under [From a release](#from-a-release): the generic `com.aspen.flexbar-ai-dashboard.flexplugin` first, for FlexDesigner versions that take the first asset, then the platform ones. FlexDesigner looks for `<uuid>.<os>.<arch>.flexplugin` and may pick either darwin asset on any Mac, so both carry the arm64 and x64 binaries.
+Releases: pushing a `v*` tag runs `.github/workflows/release.yml`, which calls `npm run release:pack` (`scripts/pack-release.cjs`: one `npm run plugin:pack` per asset with the matching `FLEX_TARGET`), checks the assets with `node scripts/pack-release.cjs --verify dist` (each must bundle exactly its native canvas packages with all their files, and no `config.json`), and uploads the assets listed under [From a release](#from-a-release): the universal `com.aspen.flexbar-ai-dashboard.all.flexplugin` (named to sort first, since GitHub lists assets by name and older FlexDesigner versions take the first one) and the platform ones. FlexDesigner looks for `<uuid>.<os>.<arch>.flexplugin` and may pick either darwin asset on any Mac, so both carry the arm64 and x64 binaries.
 
 ## Project Structure
 

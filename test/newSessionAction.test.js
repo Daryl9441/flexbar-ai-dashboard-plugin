@@ -4,6 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const {
+  WINDOWS_MAX_URL_LENGTH,
   buildCodexNewThreadUrl,
   createOpenUrlCommand,
   listRecentProjectPaths,
@@ -140,4 +141,31 @@ test("project label is the folder name", () => {
   assert.equal(projectLabel("/Users/me/flexbar-ai-dashboard-plugin/"), "flexbar-ai-dashboard-plugin");
   assert.equal(projectLabel("C:\\work\\repo"), "repo");
   assert.equal(projectLabel(""), "");
+});
+
+test("openNewCodexSession tags why it failed so the key can show a specific message", async () => {
+  let ran = 0;
+  const run = async () => {
+    ran += 1;
+  };
+
+  const invalid = await openNewCodexSession({ projectPath: "~/repo", platform: "darwin", runCommand: run });
+  assert.equal(invalid.reason, "invalidProject");
+
+  const long = await openNewCodexSession({ prompt: "修".repeat(300), platform: "win32", runCommand: run });
+  assert.equal(long.ok, false);
+  assert.equal(long.reason, "promptTooLong");
+  assert.ok(long.url.length > WINDOWS_MAX_URL_LENGTH);
+  assert.equal(ran, 0, "nothing is opened for rejected requests");
+
+  const macLong = await openNewCodexSession({ prompt: "修".repeat(300), platform: "darwin", runCommand: run });
+  assert.equal(macLong.ok, true, "macOS open handles long URLs");
+
+  const failed = await openNewCodexSession({
+    platform: "darwin",
+    runCommand: async () => {
+      throw new Error("boom");
+    },
+  });
+  assert.equal(failed.reason, "openFailed");
 });

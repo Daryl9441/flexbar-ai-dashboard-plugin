@@ -18,7 +18,7 @@
     "plugin:install": "npm run plugin:pack && node scripts/flexcli.cjs plugin install --path ./com.aspen.flexbar-ai-dashboard.flexplugin --force"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20.10"
   },
   "type": "commonjs",
   "devDependencies": {

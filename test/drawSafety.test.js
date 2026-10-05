@@ -493,7 +493,7 @@ test("by default an unchanged key is re-sent every minute, not every refresh tic
 // device.status payloads copied from a real FlexDesigner plugin log: an unplug
 // sends two "disconnected" events, a replug one "connected" event that also
 // carries `_removeDevice: true`, and plugin.alive follows about 0.5s later.
-const REAL_SERIAL = "001100AA0001";
+const REAL_SERIAL = "001100AA0001"; // same format as a real Flexbar serial number
 const REAL_DISCONNECT_FIRST = [
   { serialNumber: REAL_SERIAL, status: "disconnected", _removeDevice: false, _sendWebEvent: false },
 ];

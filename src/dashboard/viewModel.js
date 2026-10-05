@@ -32,8 +32,7 @@ function buildDashboardViewModel(snapshot, state = createDashboardState(), optio
   const sessionSlots = Number.isFinite(Number(options.sessionSlots)) ? Number(options.sessionSlots) : 1;
   const rankedSessions = rankSessions(snapshot);
   const sessionViews = rankedSessions.slice(0, Math.max(0, sessionSlots)).map((session) => {
-    const active = isActiveActivity(session.activity);
-    state.noteSession(session.key, active);
+    noteSessionActivity(state, session);
     return buildSessionView(session, state, language);
   });
 
@@ -45,42 +44,86 @@ function buildDashboardViewModel(snapshot, state = createDashboardState(), optio
   };
 }
 
+// A running session (open turn, tool call, thinking...) with no event for this long
+// was abandoned, e.g. killed mid tool call; same limit as the collectors'
+// CODEX_OPEN_TURN_STALE_MS.
+const SESSION_OVERVIEW_RUNNING_STALE_MS = 30 * 60_000;
+// A pending approval waits for the user, who may be away from the desk for hours.
+const SESSION_OVERVIEW_APPROVAL_STALE_MS = 6 * 60 * 60_000;
+// How long a finished session stays listed (longer while it finished unseen).
 const SESSION_OVERVIEW_RECENT_MS = 30 * 60_000;
+const OVERVIEW_STATUS_ORDER = { approval: 0, running: 1, done: 2 };
 
-// Every session that is running now, waiting for approval, finished while we were
-// watching and not yet viewed, or had activity in the last 30 minutes. Running ones
-// first, then finished ones, each newest first.
+// Sessions waiting for approval (up to 6 h old), running ones with an event in the
+// last 30 minutes, then finished ones that are recent or finished while watched and
+// not yet viewed; each group newest first, so a "+N" on a full key hides the
+// finished ones first.
 function buildSessionOverview(snapshot, state = createDashboardState(), options = {}) {
   const language = normalizeLanguage(options.language);
   const now = Number.isFinite(Number(options.now)) ? Number(options.now) : Date.now();
   const recentMs = Number.isFinite(Number(options.recentMs)) ? Number(options.recentMs) : SESSION_OVERVIEW_RECENT_MS;
 
-  const items = [];
+  const listed = [];
   for (const session of rankSessions(snapshot)) {
-    const active = isActiveActivity(session.activity);
-    state.noteSession(session.key, active);
-    const approval = active && session.activity.state === "approval";
-    const unreadFinished = state.isUnreadFinished(session.key);
-    const lastActivity = sessionLastActivityValue(session);
-    const recent = lastActivity > 0 && now - lastActivity <= recentMs;
-    if (!active && !unreadFinished && !recent) continue;
+    const status = sessionOverviewStatus(session, state, now, recentMs);
+    if (status) listed.push({ session, status, lastActivity: sessionLastActivityValue(session) });
+  }
+  // Stable, so equal times keep rankSessions' order.
+  listed.sort((a, b) => OVERVIEW_STATUS_ORDER[a.status] - OVERVIEW_STATUS_ORDER[b.status] || b.lastActivity - a.lastActivity);
 
-    const status = approval ? "approval" : active ? "running" : "done";
+  const items = listed.map(({ session, status }) => {
     const title = titleFromSession(session, language);
-    items.push({
+    return {
       sessionKey: session.key,
       title,
       latestTitle: session.latestTitle || title,
       status,
       statusColor: overviewStatusColor(status),
-    });
-  }
+    };
+  });
 
   return {
     items,
     runningCount: items.filter((item) => item.status !== "done").length,
     doneCount: items.filter((item) => item.status === "done").length,
   };
+}
+
+// "approval", "running" or "done", or null when the session is not listed. Only
+// sessions whose state is trusted are noted: an unknown or stale one keeps what was
+// noted before (buildDashboardViewModel notes a stale "running" one as active, and
+// the two must not fight), and is listed only if it finished unseen.
+function sessionOverviewStatus(session, state, now, recentMs) {
+  const activity = session.activity;
+  const lastActivity = sessionLastActivityValue(session);
+  // Without any timestamp the age is unknown and the reported state is trusted.
+  const age = lastActivity > 0 ? now - lastActivity : 0;
+  const unreadOrSkip = () => (state.isUnreadFinished(session.key) ? "done" : null);
+
+  if (isUnknownActivity(activity)) return unreadOrSkip();
+
+  if (isActiveActivity(activity)) {
+    const approval = activity.state === "approval";
+    if (age > (approval ? SESSION_OVERVIEW_APPROVAL_STALE_MS : SESSION_OVERVIEW_RUNNING_STALE_MS)) return unreadOrSkip();
+    state.noteSession(session.key, true);
+    return approval ? "approval" : "running";
+  }
+
+  state.noteSession(session.key, false);
+  const recent = lastActivity > 0 && age <= recentMs;
+  return state.isUnreadFinished(session.key) || recent ? "done" : null;
+}
+
+// The collectors report "unknown" for a session they could not inspect this time
+// (no readable events); it keeps whatever state was noted for it before, so a
+// running session skipped for one refresh does not count as finished.
+function noteSessionActivity(state, session) {
+  if (isUnknownActivity(session.activity)) return;
+  state.noteSession(session.key, isActiveActivity(session.activity));
+}
+
+function isUnknownActivity(activity) {
+  return Boolean(activity) && activity.state === "unknown";
 }
 
 function applyOverviewTitleMode(overview, mode) {
@@ -517,7 +560,9 @@ function clampPercent(value) {
 }
 
 module.exports = {
+  SESSION_OVERVIEW_APPROVAL_STALE_MS,
   SESSION_OVERVIEW_RECENT_MS,
+  SESSION_OVERVIEW_RUNNING_STALE_MS,
   buildDashboardViewModel,
   buildSessionOverview,
   createDashboardState,

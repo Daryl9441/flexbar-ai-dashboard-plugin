@@ -4,6 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const {
+  renderNewSessionKey,
   renderPlanUsageKey,
   renderResetTimerKey,
   renderSessionKey,
@@ -121,6 +122,28 @@ test("reset timer localizes the unavailable state when no windows are known", ()
   renderResetTimerKey({ items: [] }, { width: 200, language: "zh-CN", canvasModule: fake });
 
   assert.ok(fake.texts.includes("不可用"));
+});
+
+test("new session key shows the action and the target project", () => {
+  const fake = createFakeCanvasModule();
+
+  const image = renderNewSessionKey({ project: "flexbar-ai-dashboard-plugin" }, { width: 240, canvasModule: fake });
+
+  assert.equal(image, "data:image/png;base64,fake");
+  assert.deepEqual(fake.sizes, [{ width: 240, height: 60 }]);
+  assert.ok(fake.texts.includes("Codex"));
+  assert.ok(fake.texts.includes("New session"));
+  assert.ok(fake.texts.some((text) => text.startsWith("flexbar-ai")));
+  assert.ok(fake.fills.includes("#22c55e"));
+});
+
+test("new session key localizes the default project hint", () => {
+  const fake = createFakeCanvasModule();
+
+  renderNewSessionKey({}, { width: 240, language: "zh-CN", canvasModule: fake });
+
+  assert.ok(fake.texts.includes("\u65b0\u4f1a\u8bdd"));
+  assert.ok(fake.texts.includes("\u5e94\u7528\u5f53\u524d\u9879\u76ee"));
 });
 
 test("session key renderer does not draw layout guide borders", () => {

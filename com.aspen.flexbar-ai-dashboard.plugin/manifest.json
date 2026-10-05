@@ -118,6 +118,28 @@
               }
           },
           {
+              "title": "$NewSession.Title",
+              "tip": "$NewSession.Tip",
+              "cid": "com.aspen.flexbar-ai-dashboard.new-session",
+              "config": {
+                  "keyType": "default",
+                  "clickable": true,
+                  "platform": [
+                      "windows",
+                      "mac"
+                  ]
+              },
+              "style": {
+                  "icon": "mdi mdi-message-plus-outline",
+                  "width": 240
+              },
+              "data": {
+                  "mode": "codex",
+                  "projectPath": "",
+                  "prompt": ""
+              }
+          },
+          {
               "title": "$Skill.Title",
               "tip": "$Skill.Tip",
               "cid": "com.aspen.flexbar-ai-dashboard.skill",
@@ -170,6 +192,10 @@
                 "Title": "Reset Timer",
                 "Tip": "Counts down to the 5h and weekly limit resets"
             },
+            "NewSession": {
+                "Title": "New Codex Session",
+                "Tip": "Opens a new Codex session in the ChatGPT app"
+            },
             "Skill": {
                 "Title": "AI Skill",
                 "Tip": "Pastes a selected Codex or Claude Code skill prompt"
@@ -192,6 +218,10 @@
             "ResetTimer": {
                 "Title": "\u91cd\u7f6e\u5012\u8ba1\u65f6",
                 "Tip": "\u5012\u8ba1\u65f6\u663e\u793a 5 \u5c0f\u65f6\u4e0e\u6bcf\u5468\u9650\u989d\u7684\u91cd\u7f6e\u65f6\u95f4"
+            },
+            "NewSession": {
+                "Title": "\u65b0\u5efa Codex \u4f1a\u8bdd",
+                "Tip": "\u5728 ChatGPT \u5e94\u7528\u4e2d\u6253\u5f00\u65b0\u7684 Codex \u4f1a\u8bdd"
             },
             "Skill": {
                 "Title": "AI \u6280\u80fd",

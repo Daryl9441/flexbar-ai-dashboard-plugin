@@ -105,6 +105,41 @@ test("reset timer config page writes data source into full key data model", () =
   assert.equal(next.dataSource, undefined);
 });
 
+test("new session config page writes project, prompt and mode into full key data model", () => {
+  const component = loadVueComponent("new-session.vue");
+  const model = {
+    cid: "com.aspen.flexbar-ai-dashboard.new-session",
+    title: "New Codex Session",
+    style: {},
+    data: {
+      mode: "codex",
+      projectPath: "",
+      prompt: "",
+    },
+  };
+
+  const project = mountConfigComponent(component, model);
+  assert.equal(project.view.mode, "codex");
+  assert.equal(project.view.projectPath, "");
+  project.view.projectPath = " /Users/me/repo ";
+  const afterProject = latestModel(project.emitted);
+  assert.equal(afterProject.data.projectPath, "/Users/me/repo");
+  assert.equal(afterProject.data.mode, "codex");
+  assert.equal(afterProject.projectPath, undefined);
+
+  const prompt = mountConfigComponent(component, model);
+  prompt.view.prompt = "Review the diff";
+  assert.equal(latestModel(prompt.emitted).data.prompt, "Review the diff");
+
+  const mode = mountConfigComponent(component, model);
+  mode.view.mode = "bogus";
+  assert.equal(latestModel(mode.emitted).data.mode, "codex");
+
+  const cleared = mountConfigComponent(component, { ...model, data: { ...model.data, projectPath: "/x" } });
+  cleared.view.projectPath = null;
+  assert.equal(latestModel(cleared.emitted).data.projectPath, "");
+});
+
 test("session and plan config pages read data source from nested config models", () => {
   const session = mountConfigComponent(loadVueComponent("session.vue"), {
     data: {

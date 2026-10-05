@@ -209,6 +209,36 @@ function renderSkillKey(view, options = {}) {
   });
 }
 
+function renderNewSessionKey(view, options = {}) {
+  const language = normalizeLanguage(options.language);
+  return renderKey(options, (ctx, width) => {
+    drawBackground(ctx, width);
+    drawLabel(ctx, view.label || t(language, "newSessionLabel"), 10, 13);
+
+    const iconX = 22;
+    const iconY = 34;
+    ctx.beginPath();
+    ctx.fillStyle = "#22c55e";
+    ctx.arc(iconX, iconY, 11, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#050505";
+    ctx.fillRect(iconX - 6, iconY - 1.5, 12, 3);
+    ctx.fillRect(iconX - 1.5, iconY - 6, 3, 12);
+
+    const textX = iconX + 18;
+    drawText(ctx, view.title || t(language, "newSessionAction"), textX, 40, {
+      font: fontSpec("bold", 20),
+      color: "#ffffff",
+      maxWidth: width - textX - 8,
+    });
+    drawText(ctx, view.project || t(language, "newSessionDefaultProject"), 10, 56, {
+      font: fontSpec("normal", 10),
+      color: "#d4d4d8",
+      maxWidth: width - 20,
+    });
+  });
+}
+
 function renderKey(options, draw) {
   const width = Math.max(60, Math.round(Number(options.width) || 240));
   const canvasModule = options.canvasModule === undefined ? loadCanvasModule() : options.canvasModule;
@@ -372,6 +402,7 @@ function drawRoundedRect(ctx, x, y, width, height, radius, color) {
 
 module.exports = {
   HEIGHT,
+  renderNewSessionKey,
   renderPlanUsageKey,
   renderResetTimerKey,
   renderSessionKey,

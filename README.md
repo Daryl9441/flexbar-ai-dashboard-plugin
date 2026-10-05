@@ -55,11 +55,13 @@ Implementation plans live in `docs/superpowers/plans/`.
 - Node.js 18 or later
 - FlexDesigner 1.3.0 or later
 - A Flexbar device
-- FlexCLI
+- FlexCLI (optional: the npm scripts run `@eniac/flexcli@1.0.7` through `npx` via `scripts/flexcli.cjs`)
 
 ```bash
 npm install -g @eniac/flexcli
 ```
+
+FlexCLI 1.0.7 crashes on Node.js 22+ with `SyntaxError: Unexpected identifier 'assert'`. `scripts/flexcli.cjs` patches this at load time, so run FlexCLI through the `npm run plugin:*` scripts (or `node scripts/flexcli.cjs ...`) instead of a global `flexcli`, or use Node.js 20 LTS.
 
 ### Install Dependencies
 
@@ -69,9 +71,26 @@ cd flexbar-ai-dashboard
 npm install
 ```
 
+## macOS local install / 本地安装 (macOS)
+
+The `.flexplugin` attached to GitHub releases is built on Ubuntu, and the build only bundles the `@napi-rs/canvas` native binary of the machine it runs on (`@napi-rs/canvas-linux-x64-gnu`). On macOS that binary cannot load, so key images cannot be rendered: the Flexbar keeps showing the default icons and never the Codex / Claude data, even though the backend collects it. Build and install from source on the Mac instead:
+
+GitHub Release 里的 `.flexplugin` 是在 Ubuntu 上构建的，只包含 linux-x64 的 canvas 原生二进制。macOS 无法加载它，按键图片无法渲染，Flexbar 只显示默认图标、不显示 Codex / Claude 数据（后端其实已采集到）。请在 Mac 上从源码构建并安装：
+
+```bash
+npm install
+npm run doctor          # preflight check / 环境自检
+npm run plugin:install  # build -> doctor -> flexcli plugin pack -> flexcli plugin install --force
+```
+
+- FlexDesigner must be running for `plugin:install` (and `dev`); FlexCLI talks to it over a local WebSocket. / 执行 `plugin:install`（以及 `dev`）时 FlexDesigner 必须处于运行状态。
+- Manual import: run `npm run plugin:pack`, then import `com.aspen.flexbar-ai-dashboard.flexplugin` with the **+** button at the top right of the key library. / 手动导入：执行 `npm run plugin:pack`，再通过按键库右上角的 **+** 导入该文件。
+- `npm run doctor` checks Node.js, `manifest.json` (uuid vs. folder), the built backend, and that the `@napi-rs/canvas` binary for this OS/CPU is bundled and loads from the plugin folder alone. It runs automatically before `plugin:pack`, `plugin:install` and `dev`. / 打包、安装和 `dev` 前会自动执行自检。
+- Check an installed copy (read-only) / 检查已安装的插件（只读）：`node scripts/doctor.cjs --plugin-dir="$HOME/Library/Application Support/FlexDesigner/data/plugins/com.aspen.flexbar-ai-dashboard"`. Check a build for another OS / 检查其他平台的构建：`FLEX_TARGET=win32-x64 npm run doctor`.
+
 ## Development
 
-Start the plugin in development mode:
+Make sure FlexDesigner is running, then start the plugin in development mode:
 
 ```bash
 npm run dev
@@ -79,6 +98,7 @@ npm run dev
 
 This command:
 
+- builds the backend and runs `npm run doctor` (`predev`)
 - unlinks the old `com.aspen.flexbar-ai-dashboard` plugin
 - links `com.aspen.flexbar-ai-dashboard.plugin`
 - starts Rollup in watch mode
@@ -97,8 +117,9 @@ npm run prototype:json
 Common checks:
 
 ```bash
-npm test
 npm run build
+npm test
+npm run doctor
 npm run plugin:validate
 ```
 
@@ -146,15 +167,17 @@ Key images are rendered with `@napi-rs/canvas`, whose native binary is platform 
 FLEX_TARGET=all npm run build
 ```
 
+On Windows PowerShell: `$env:FLEX_TARGET='all'; npm run build`.
+
 Binaries missing from `node_modules` are fetched with `npm pack` at the exact installed `@napi-rs/canvas` version (cached in the system temp directory; `package.json` and the lockfile are untouched). The build fails if a requested binary cannot be bundled.
 
-Pack the `.flexplugin` artifact:
+Pack the `.flexplugin` artifact (runs `npm run build` and `npm run doctor` first):
 
 ```bash
 npm run plugin:pack
 ```
 
-Install the packed artifact:
+Install the packed artifact into the running FlexDesigner (runs `plugin:pack` first):
 
 ```bash
 npm run plugin:install
@@ -194,6 +217,7 @@ com.aspen.flexbar-ai-dashboard.plugin/
   ui/              global config page and key config pages
   backend/         Rollup build output
 
+scripts/           doctor.cjs preflight check and flexcli.cjs FlexCLI wrapper
 test/              Node test runner tests
 docs/              implementation plans and maintenance notes
 ```

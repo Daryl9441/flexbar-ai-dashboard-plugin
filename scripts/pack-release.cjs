@@ -12,7 +12,7 @@
 // be followed by an arch: "<name>.darwin.flexplugin" matches none of its patterns.
 //
 // usage: node scripts/pack-release.cjs [outDir]   (default: dist)
-// Needs `flexcli` on PATH for `npm run plugin:pack`.
+// `npm run plugin:pack` builds, runs the doctor, and packs via scripts/flexcli.cjs.
 
 const fs = require("node:fs");
 const path = require("node:path");
@@ -52,7 +52,7 @@ function packRelease({ outDir = path.join(projectDir, "dist"), uuid = readPlugin
       fs.copyFileSync(packedByTarget.get(flexTarget), destination);
     } else {
       const env = { ...process.env, FLEX_TARGET: flexTarget };
-      runNpm(["run", "build"], { cwd: projectDir, env, inherit: true });
+      // plugin:pack runs build + doctor for FLEX_TARGET before packing.
       runNpm(["run", "plugin:pack"], { cwd: projectDir, env, inherit: true });
       // flexcli writes <uuid>.flexplugin next to the plugin directory.
       moveFile(path.join(projectDir, `${uuid}.flexplugin`), destination);

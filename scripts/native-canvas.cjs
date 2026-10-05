@@ -9,12 +9,16 @@
 // platforms to bundle (default: the build host).
 
 const childProcess = require("node:child_process");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const zlib = require("node:zlib");
 
 const CANVAS_PACKAGE = "@napi-rs/canvas";
+const CACHE_DIR_NAME = "flexbar-native-canvas";
+/** Errors for a file another process keeps open (Windows: a loaded .node binary) or that is not writable. */
+const LOCKED_FILE_CODES = new Set(["EPERM", "EBUSY", "EACCES"]);
 
 /** Build target (`<process.platform>-<process.arch>`) -> @napi-rs/canvas native package suffix. */
 const NATIVE_CANVAS_TARGETS = Object.freeze({
@@ -102,16 +106,18 @@ function describeAcceptedTargets() {
  * that were not requested, and throws if any requested binary is missing.
  * Native packages always match the installed @napi-rs/canvas version: the copy
  * in node_modules is used when it matches, otherwise the exact version is
- * fetched with `npm pack` into a cache outside the project (no package.json,
- * lockfile or node_modules changes).
+ * fetched with `npm pack` (no package.json, lockfile or node_modules changes).
+ * Packages already bundled with identical contents are left untouched.
  */
 function bundleNativeCanvas({
   projectDir,
   pluginDir,
   targets,
-  cacheDir = defaultCacheDir(),
+  cacheDir = defaultCacheDir(projectDir),
   fetchPackage = fetchNativePackage,
+  fsApi = fs,
   log = () => {},
+  warn = log,
 }) {
   if (!Array.isArray(targets) || targets.length === 0) {
     throw new Error("No native canvas targets were requested");
@@ -124,35 +130,51 @@ function bundleNativeCanvas({
   }
   const version = canvasPackage.version;
   const publishedNativePackages = canvasPackage.optionalDependencies || {};
+  const cleanups = [];
 
-  const sources = targets.map((target) => {
-    const name = nativeCanvasPackageName(target);
-    if (!Object.prototype.hasOwnProperty.call(publishedNativePackages, name)) {
-      throw new Error(`${CANVAS_PACKAGE}@${version} does not publish ${name} (target ${target})`);
-    }
-    const installedDir = packageDir(path.join(projectDir, "node_modules"), name);
-    if (isUsableNativePackage(installedDir, name, version)) {
-      return { target, name, dir: installedDir, source: "node_modules" };
-    }
-    const fetchedDir = fetchPackage({ name, version, cacheDir, projectDir, log });
-    assertNativePackage(fetchedDir, name, version, target);
-    return { target, name, dir: fetchedDir, source: "npm pack" };
-  });
+  try {
+    const sources = targets.map((target) => {
+      const name = nativeCanvasPackageName(target);
+      if (!Object.prototype.hasOwnProperty.call(publishedNativePackages, name)) {
+        throw new Error(`${CANVAS_PACKAGE}@${version} does not publish ${name} (target ${target})`);
+      }
+      const installedDir = packageDir(path.join(projectDir, "node_modules"), name);
+      if (isUsableNativePackage(installedDir, name, version)) {
+        return { target, name, dir: installedDir, source: "node_modules" };
+      }
+      const fetched = fetchPackage({ name, version, target, cacheDir, projectDir, log });
+      const { dir, source = "npm pack", cleanup } = typeof fetched === "string" ? { dir: fetched } : fetched;
+      if (cleanup) cleanups.push(cleanup);
+      assertNativePackage(dir, name, version, target);
+      return { target, name, dir, source };
+    });
 
-  const backendModules = path.join(pluginDir, "backend", "node_modules");
-  copyPackage(canvasDir, packageDir(backendModules, CANVAS_PACKAGE));
-  removeUnrequestedNativePackages(backendModules, new Set(sources.map((source) => source.name)), log);
-
-  return sources.map((source) => {
-    const destination = packageDir(backendModules, source.name);
-    copyPackage(source.dir, destination);
-    const binary = assertNativePackage(destination, source.name, version, source.target);
-    return { ...source, version, binary, bytes: fs.statSync(binary).size };
-  });
+    // Native packages first: if Windows keeps one locked, the build stops before
+    // the JS package moves to a version its binary does not match.
+    const backendModules = path.join(pluginDir, "backend", "node_modules");
+    const bundled = sources.map(({ dir, ...source }) => {
+      const destination = packageDir(backendModules, source.name);
+      const copy = syncPackage(dir, destination, { fsApi });
+      const binary = assertNativePackage(destination, source.name, version, source.target);
+      return { ...source, version, copy, binary, bytes: fs.statSync(binary).size };
+    });
+    const canvasCopy = syncPackage(canvasDir, packageDir(backendModules, CANVAS_PACKAGE), { fsApi });
+    log(`${CANVAS_PACKAGE}@${version}: ${describeCopy(canvasCopy)}`);
+    removeUnrequestedNativePackages(backendModules, new Set(sources.map((source) => source.name)), { fsApi, log, warn });
+    return bundled;
+  } finally {
+    for (const cleanup of cleanups) cleanup();
+  }
 }
 
-function defaultCacheDir() {
-  return path.join(os.tmpdir(), "flexbar-ai-dashboard-native-canvas");
+/** Human-readable syncPackage() result for build logs. */
+function describeCopy(copy) {
+  return copy === "unchanged" ? "unchanged, copy skipped" : copy;
+}
+
+/** Project-local and gitignored (like other build caches), never a shared temp dir. */
+function defaultCacheDir(projectDir = process.cwd()) {
+  return path.join(projectDir, "node_modules", ".cache", CACHE_DIR_NAME);
 }
 
 function packageDir(nodeModulesDir, packageName) {
@@ -163,7 +185,7 @@ function readPackageJson(dir) {
   try {
     return JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8"));
   } catch (error) {
-    if (error && error.code === "ENOENT") return null;
+    if (error && (error.code === "ENOENT" || error.code === "ENOTDIR")) return null;
     throw error;
   }
 }
@@ -173,11 +195,25 @@ function nativeBinaryPath(dir, packageJson) {
   return main.endsWith(".node") ? path.join(dir, main) : null;
 }
 
+/**
+ * Entries of package.json "files" that are missing from dir (e.g. icudtl.dat,
+ * which the Windows binary needs next to it). Glob patterns are not expanded.
+ */
+function missingPackageFiles(dir, packageJson) {
+  const root = path.resolve(dir);
+  const files = Array.isArray(packageJson && packageJson.files) ? packageJson.files : [];
+  return files.filter((entry) => {
+    if (typeof entry !== "string" || /[*?[\]{}!]/.test(entry)) return false;
+    const file = path.resolve(root, entry);
+    return !(file === root || file.startsWith(root + path.sep)) || !fs.existsSync(file);
+  });
+}
+
 function isUsableNativePackage(dir, name, version) {
   const packageJson = readPackageJson(dir);
   if (!packageJson || packageJson.name !== name || packageJson.version !== version) return false;
   const binary = nativeBinaryPath(dir, packageJson);
-  return !!binary && fs.existsSync(binary) && fs.statSync(binary).size > 0;
+  return !!binary && fs.existsSync(binary) && fs.statSync(binary).size > 0 && missingPackageFiles(dir, packageJson).length === 0;
 }
 
 function assertNativePackage(dir, name, version, target) {
@@ -199,57 +235,230 @@ function assertNativePackage(dir, name, version, target) {
   if (!binary || !fs.existsSync(binary) || fs.statSync(binary).size === 0) {
     throw new Error(`Native canvas binary for ${target} is missing from ${dir}`);
   }
+  const missing = missingPackageFiles(dir, packageJson);
+  if (missing.length > 0) {
+    throw new Error(`${name} for ${target} is incomplete, missing ${missing.join(", ")} in ${dir}`);
+  }
   return binary;
 }
 
-function copyPackage(source, destination) {
-  try {
-    fs.rmSync(destination, { recursive: true, force: true });
-  } catch (error) {
-    // Windows keeps a loaded .node file locked while FlexDesigner runs the plugin.
-    if (error && error.code === "EPERM" && fs.existsSync(destination)) return;
-    throw error;
+/**
+ * Makes destination an exact copy of the package in source and returns
+ * "unchanged", "copied" (destination was missing) or "updated".
+ *
+ * Files whose size and SHA-256 already match are not touched, so a rebuild
+ * with unchanged binaries writes nothing (Windows keeps a loaded .node file
+ * locked while FlexDesigner runs the plugin, and the binaries are 10-30 MB).
+ * Nothing is deleted up front: changed files are written next to their target
+ * and renamed over it, native binaries first and package.json last, so a
+ * locked binary stops the update before the rest of the package changes.
+ */
+function syncPackage(source, destination, { fsApi = fs } = {}) {
+  const sourceFiles = listPackageFiles(source);
+  const existed = fs.existsSync(destination);
+  const destinationFiles = existed ? listPackageFiles(destination) : [];
+  const changed = sourceFiles.filter((file) => !sameFileContents(path.join(source, file), path.join(destination, file)));
+  const extra = destinationFiles.filter((file) => !sourceFiles.includes(file));
+  if (existed && changed.length === 0 && extra.length === 0) return "unchanged";
+
+  changed.sort((a, b) => updateRank(a) - updateRank(b) || a.localeCompare(b));
+  for (const file of changed) {
+    replaceFile(path.join(source, file), path.join(destination, file), fsApi);
   }
-  fs.mkdirSync(path.dirname(destination), { recursive: true });
-  fs.cpSync(source, destination, { recursive: true });
+  for (const file of extra) {
+    try {
+      fsApi.unlinkSync(path.join(destination, file));
+    } catch (error) {
+      throw lockedFileError(error, path.join(destination, file));
+    }
+  }
+  return existed ? "updated" : "copied";
 }
 
-function removeUnrequestedNativePackages(backendModules, keep, log) {
+function updateRank(file) {
+  if (file.endsWith(".node")) return 0;
+  return file === "package.json" ? 2 : 1;
+}
+
+/** Relative paths of every file below dir, following symlinks. */
+function listPackageFiles(dir, prefix = "") {
+  const files = [];
+  for (const entry of fs.readdirSync(path.join(dir, prefix)).sort()) {
+    const relative = path.join(prefix, entry);
+    if (fs.statSync(path.join(dir, relative)).isDirectory()) files.push(...listPackageFiles(dir, relative));
+    else files.push(relative);
+  }
+  return files;
+}
+
+function sameFileContents(a, b) {
+  let statA;
+  let statB;
+  try {
+    statA = fs.statSync(a);
+    statB = fs.statSync(b);
+  } catch (error) {
+    if (error && (error.code === "ENOENT" || error.code === "ENOTDIR")) return false;
+    throw error;
+  }
+  return statB.isFile() && statA.size === statB.size && fileDigest(a, "sha256", "hex") === fileDigest(b, "sha256", "hex");
+}
+
+function fileDigest(file, algorithm, encoding) {
+  const hash = crypto.createHash(algorithm);
+  const buffer = Buffer.alloc(1024 * 1024);
+  const fd = fs.openSync(file, "r");
+  try {
+    let bytes;
+    while ((bytes = fs.readSync(fd, buffer, 0, buffer.length, null)) > 0) hash.update(buffer.subarray(0, bytes));
+  } finally {
+    fs.closeSync(fd);
+  }
+  return hash.digest(encoding);
+}
+
+function replaceFile(source, destination, fsApi) {
+  const temporary = `${destination}.${process.pid}.tmp`;
+  try {
+    fsApi.mkdirSync(path.dirname(destination), { recursive: true });
+    fsApi.copyFileSync(source, temporary);
+    fsApi.renameSync(temporary, destination);
+  } catch (error) {
+    try {
+      fsApi.rmSync(temporary, { force: true });
+    } catch {
+      // best effort; a leftover .tmp file is removed by the next sync
+    }
+    throw lockedFileError(error, destination);
+  }
+}
+
+function lockedFileError(error, file) {
+  if (!error || !LOCKED_FILE_CODES.has(error.code)) return error;
+  const locked = new Error(
+    `${file} could not be replaced (${error.code}: in use or not writable). ` +
+    "Windows locks a loaded .node file while FlexDesigner runs the plugin: stop the plugin (or quit FlexDesigner), then build again."
+  );
+  locked.code = error.code;
+  return locked;
+}
+
+function removeUnrequestedNativePackages(backendModules, keep, { fsApi = fs, log = () => {}, warn = log } = {}) {
   const scopeDir = path.join(backendModules, "@napi-rs");
   if (!fs.existsSync(scopeDir)) return;
   for (const entry of fs.readdirSync(scopeDir)) {
     const name = `@napi-rs/${entry}`;
     if (!entry.startsWith("canvas-") || keep.has(name)) continue;
-    fs.rmSync(path.join(scopeDir, entry), { recursive: true, force: true });
-    log(`removed stale ${name} from the plugin backend`);
+    const dir = path.join(scopeDir, entry);
+    try {
+      // Binaries first: a locked one keeps the package whole instead of half-deleted.
+      for (const file of listPackageFiles(dir).filter((item) => item.endsWith(".node"))) {
+        fsApi.unlinkSync(path.join(dir, file));
+      }
+      fsApi.rmSync(dir, { recursive: true, force: true });
+      log(`removed stale ${name} from the plugin backend`);
+    } catch (error) {
+      if (!error || !LOCKED_FILE_CODES.has(error.code)) throw error;
+      warn(`could not remove stale ${name} (${error.code}: in use, e.g. by FlexDesigner); it stays in the plugin backend until a later build`);
+    }
   }
 }
 
 /**
- * Downloads <name>@<version> with `npm pack` (integrity-checked against the
- * registry) and extracts it into cacheDir. Returns the extracted package dir.
+ * Provides <name>@<version> for a target npm did not install, extracted into a
+ * fresh private temp dir. Returns { dir, source: "cache" | "npm pack", cleanup }.
+ *
+ * The tarball comes from `npm pack` (npm verifies it against the registry) and
+ * must match the integrity package-lock.json records for the package. Only
+ * tarballs with such a lockfile entry are cached (in node_modules/.cache), and
+ * a cached tarball is re-verified against the lockfile every time it is used.
  */
-function fetchNativePackage({ name, version, cacheDir, projectDir, log = () => {}, runNpm = runNpmCommand }) {
-  const destination = path.join(cacheDir, `${name.replace("/", "+")}@${version}`);
-  if (isUsableNativePackage(destination, name, version)) return destination;
-
-  fs.mkdirSync(cacheDir, { recursive: true });
-  const workDir = fs.mkdtempSync(path.join(cacheDir, "pack-"));
+function fetchNativePackage({
+  name,
+  version,
+  projectDir,
+  cacheDir = defaultCacheDir(projectDir),
+  log = () => {},
+  runNpm = runNpmCommand,
+  integrity = lockfileIntegrity(projectDir, name, version),
+}) {
+  const cachedTarball = path.join(cacheDir, `${name.replace("/", "+")}-${version}.tgz`);
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), "flexbar-native-canvas-"));
+  const cleanup = () => fs.rmSync(workDir, { recursive: true, force: true });
   try {
-    log(`fetching ${name}@${version} with npm pack`);
-    runNpm(["pack", `${name}@${version}`, "--pack-destination", workDir, "--loglevel=error"], { cwd: projectDir || process.cwd() });
-    const tarballs = fs.readdirSync(workDir).filter((file) => file.endsWith(".tgz"));
-    if (tarballs.length !== 1) {
-      throw new Error(`npm pack ${name}@${version} produced ${tarballs.length} tarballs in ${workDir}`);
+    let tarball = null;
+    let source = "cache";
+    if (integrity && fs.existsSync(cachedTarball)) {
+      if (matchesIntegrity(cachedTarball, integrity)) {
+        tarball = cachedTarball;
+        log(`using cached ${name}@${version} (integrity matches package-lock.json)`);
+      } else {
+        log(`ignoring cached ${name}@${version}: it does not match the package-lock.json integrity`);
+      }
     }
-    const staging = path.join(workDir, "package");
-    extractNpmTarball(path.join(workDir, tarballs[0]), staging);
-    fs.rmSync(destination, { recursive: true, force: true });
-    fs.renameSync(staging, destination);
-  } finally {
-    fs.rmSync(workDir, { recursive: true, force: true });
+    if (!tarball) {
+      source = "npm pack";
+      log(`fetching ${name}@${version} with npm pack`);
+      tarball = npmPack(name, version, workDir, projectDir, runNpm);
+      if (integrity) {
+        if (!matchesIntegrity(tarball, integrity)) {
+          throw new Error(`npm pack ${name}@${version} does not match the integrity recorded in package-lock.json`);
+        }
+        storeInCache(tarball, cachedTarball, log);
+      }
+    }
+    return { dir: extractNpmTarball(tarball, path.join(workDir, "package")), source, cleanup };
+  } catch (error) {
+    cleanup();
+    throw error;
   }
-  return destination;
+}
+
+function npmPack(name, version, workDir, projectDir, runNpm) {
+  const packDir = path.join(workDir, "pack");
+  fs.mkdirSync(packDir);
+  runNpm(["pack", `${name}@${version}`, "--pack-destination", packDir, "--loglevel=error"], { cwd: projectDir || process.cwd() });
+  const tarballs = fs.readdirSync(packDir).filter((file) => file.endsWith(".tgz"));
+  if (tarballs.length !== 1) {
+    throw new Error(`npm pack ${name}@${version} produced ${tarballs.length} tarballs in ${packDir}`);
+  }
+  return path.join(packDir, tarballs[0]);
+}
+
+function storeInCache(tarball, cachedTarball, log) {
+  const temporary = `${cachedTarball}.${process.pid}.tmp`;
+  try {
+    fs.mkdirSync(path.dirname(cachedTarball), { recursive: true });
+    fs.copyFileSync(tarball, temporary);
+    fs.renameSync(temporary, cachedTarball);
+  } catch (error) {
+    fs.rmSync(temporary, { force: true });
+    log(`could not cache ${path.basename(cachedTarball)}: ${error.message}`);
+  }
+}
+
+/** The integrity npm-shrinkwrap.json / package-lock.json records for name@version, or null. */
+function lockfileIntegrity(projectDir, name, version) {
+  if (!projectDir) return null;
+  for (const lockfile of ["npm-shrinkwrap.json", "package-lock.json"]) {
+    let lock;
+    try {
+      lock = JSON.parse(fs.readFileSync(path.join(projectDir, lockfile), "utf8"));
+    } catch {
+      continue;
+    }
+    const entry = (lock.packages && lock.packages[`node_modules/${name}`]) || (lock.dependencies && lock.dependencies[name]);
+    if (entry && entry.version === version && typeof entry.integrity === "string") return entry.integrity;
+  }
+  return null;
+}
+
+/** Checks a file against a Subresource Integrity string such as "sha512-<base64>". */
+function matchesIntegrity(file, integrity) {
+  return String(integrity).trim().split(/\s+/).some((item) => {
+    const match = /^(sha512|sha384|sha256|sha1)-([A-Za-z0-9+/=]+)/.exec(item);
+    return !!match && fileDigest(file, match[1], "base64") === match[2];
+  });
 }
 
 /**
@@ -333,11 +542,17 @@ module.exports = {
   DESKTOP_TARGETS,
   NATIVE_CANVAS_TARGETS,
   TARGET_ALIASES,
+  assertNativePackage,
   bundleNativeCanvas,
+  defaultCacheDir,
+  describeCopy,
   extractNpmTarball,
   fetchNativePackage,
   hostCanvasTarget,
+  lockfileIntegrity,
+  missingPackageFiles,
   nativeCanvasPackageName,
   resolveCanvasTargets,
   runNpmCommand,
+  syncPackage,
 };

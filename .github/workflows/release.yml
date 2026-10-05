@@ -24,12 +24,14 @@ jobs:
       - name: Install dependencies
         run: npm i
 
+      # Same version scripts/flexcli.cjs runs for the npm run plugin:* scripts.
       - name: Install FlexCli
-        run: npm install -g @eniac/flexcli
+        run: npm install -g @eniac/flexcli@1.0.7
 
       # npm only installs the @napi-rs/canvas binary of this Linux runner, so each
       # asset fetches the binaries it needs (FLEX_TARGET) and the build fails if one
-      # is missing. Produces, in dist/:
+      # is missing. The doctor in plugin:pack skips its canvas load test here: none
+      # of these binaries can be loaded on Linux. Produces, in dist/:
       #   com.aspen.flexbar-ai-dashboard.darwin.arm64.flexplugin  macOS arm64 + x64
       #   com.aspen.flexbar-ai-dashboard.darwin.x64.flexplugin    macOS arm64 + x64
       #   com.aspen.flexbar-ai-dashboard.win32.x64.flexplugin     Windows x64
@@ -38,14 +40,30 @@ jobs:
       - name: Build and pack platform plugins
         run: npm run release:pack
 
+      # Fails unless every asset bundles exactly its native canvas packages
+      # (darwin: darwin-arm64 + darwin-x64, win32: win32-x64-msvc with icudtl.dat,
+      # generic: all three), every file their package.json lists, and no config.json.
       - name: Check bundled native binaries
         run: |
+          node scripts/pack-release.cjs --verify dist
           for asset in dist/*.flexplugin; do
             echo "$asset"
-            unzip -l "$asset" | grep -E 'canvas-[^/]+/skia\.[^/]+\.node$'
+            unzip -l "$asset" | grep -E 'node_modules/@napi-rs/canvas-[^/]+/[^/]+$'
           done
 
-      - name: Upload Release Asset
+      # FlexDesigner versions without <os>.<arch> lookup install the first
+      # .flexplugin of the release, so the generic one is uploaded first, alone.
+      - name: Upload generic release asset
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*.flexplugin
+          fail_on_unmatched_files: true
+          files: dist/com.aspen.flexbar-ai-dashboard.flexplugin
+
+      - name: Upload platform release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          fail_on_unmatched_files: true
+          files: |
+            dist/com.aspen.flexbar-ai-dashboard.darwin.arm64.flexplugin
+            dist/com.aspen.flexbar-ai-dashboard.darwin.x64.flexplugin
+            dist/com.aspen.flexbar-ai-dashboard.win32.x64.flexplugin

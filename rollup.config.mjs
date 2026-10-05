@@ -83,17 +83,20 @@ const config = {
       generateBundle() {
         let bundled;
         try {
+          // Unchanged packages are not rewritten, so watch rebuilds leave the
+          // binary FlexDesigner has loaded (and Windows keeps locked) alone.
           bundled = nativeCanvas.bundleNativeCanvas({
             projectDir,
-            pluginDir: path.resolve(flexPlugin),
+            pluginDir: path.join(projectDir, flexPlugin),
             targets: canvasTargets,
             log: (message) => this.info(message),
+            warn: (message) => this.warn(message),
           });
         } catch (error) {
           this.error(`Could not bundle the @napi-rs/canvas native binary: ${error.message}`);
         }
         for (const item of bundled) {
-          this.info(`bundled ${item.name}@${item.version} for ${item.target} (${item.source})`);
+          this.info(`bundled ${item.name}@${item.version} for ${item.target} from ${item.source} (${nativeCanvas.describeCopy(item.copy)})`);
         }
       }
     },

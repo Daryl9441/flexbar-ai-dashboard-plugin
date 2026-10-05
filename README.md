@@ -171,6 +171,19 @@ Maintenance map:
 - Flexbar config page changes: update `test/keyConfigPages.test.js`.
 - Claude hooks / statusLine setup changes: update `test/claudeBridgeInstall.test.js` and `test/oneClickSetup.test.js`.
 
+## Privacy / 隐私
+
+Nothing pushed to this repository may contain tokens, API keys, OAuth credentials, personal emails, local usernames or personal paths, device serial numbers, or real session data; commits use the GitHub noreply email. The full rules are in [CLAUDE.md](CLAUDE.md#privacy-rules--隐私规则).
+
+推送到本仓库的内容不得包含 Token、API Key、OAuth 凭据、个人邮箱、本机用户名或个人路径、设备序列号或真实会话数据；提交使用 GitHub noreply 邮箱。完整规则见 [CLAUDE.md](CLAUDE.md#privacy-rules--隐私规则)。
+
+```bash
+npm run hooks:install   # once per clone: the pre-push hook blocks pushes with findings
+npm run check:privacy   # tracked files + unpushed commits; also --staged, --tracked, --range <revs>
+```
+
+`scripts/check-privacy.cjs` also reads a local denylist of your own identifiers from `.git/info/privacy-denylist` (one literal per line; it lives inside `.git`, so it is never committed, and its terms are never printed). CI runs the same scan on every push and pull request (`.github/workflows/privacy.yml`). Checked false positives go into `.privacy-allowlist` with a justification, or get a `privacy-allow` comment on the line.
+
 ## Claude Bridge Setup
 
 Clicking **One-click install** on the global config page will:

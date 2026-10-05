@@ -1,0 +1,60 @@
+name: Privacy check
+
+# Fails when a tracked file or a pushed / proposed commit contains private data (tokens, API keys, personal emails
+# or paths, device serial numbers) or a commit is authored with a non-noreply email. See CLAUDE.md "Privacy rules".
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  privacy:
+    runs-on: ubuntu-latest
+    env:
+      # On the runner origin/<branch> already contains the pushed commits, so "already on origin/main" says nothing
+      # here: check the commit metadata of every scanned commit that upstream does not have.
+      PRIVACY_PUBLISHED_REFS: ""
+    steps:
+      - name: Code checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Upstream's own commits are already public and not ours to rewrite; the scanner skips commits reachable from
+      # upstream/main (e.g. when the fork syncs with upstream).
+      - name: Fetch upstream main
+        run: git fetch --no-tags https://github.com/ENIAC-Tech/flexbar-ai-dashboard-plugin.git +main:refs/remotes/upstream/main || echo "upstream/main not fetched; scanning without it"
+
+      - name: Scan tracked files
+        run: node scripts/check-privacy.cjs --tracked
+
+      - name: Scan pushed commits
+        if: github.event_name == 'push'
+        env:
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if [ -n "$BEFORE" ] && ! echo "$BEFORE" | grep -Eq '^0+$' && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            node scripts/check-privacy.cjs --range "$BEFORE..$SHA"
+          else
+            # New branch, or a force push whose old tip the runner cannot see: every commit not on the default branch.
+            node scripts/check-privacy.cjs --range "$SHA --not origin/$DEFAULT_BRANCH"
+          fi
+
+      # The PR head, not the synthetic merge commit GitHub builds for the workflow.
+      - name: Scan pull request commits
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/check-privacy.cjs --range "origin/$BASE_REF..$HEAD_SHA"

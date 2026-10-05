@@ -1,0 +1,12 @@
+#!/bin/sh
+# Blocks a push that would publish private data: tokens, API keys, personal emails and paths, device serial
+# numbers, local denylist terms, or a commit whose author/committer email is not a GitHub noreply address.
+# See CLAUDE.md "Privacy rules". Install with: npm run hooks:install (git config core.hooksPath .githooks)
+# Git passes "<local ref> <local sha> <remote ref> <remote sha>" lines on stdin; the scanner reads them.
+
+root=$(git rev-parse --show-toplevel) || exit 1
+if ! command -v node >/dev/null 2>&1; then
+  echo "pre-push: node was not found, so the privacy check cannot run; push blocked." >&2
+  exit 1
+fi
+exec node "$root/scripts/check-privacy.cjs" --pre-push

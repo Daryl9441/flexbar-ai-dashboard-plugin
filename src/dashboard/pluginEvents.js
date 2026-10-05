@@ -77,6 +77,15 @@ function dataSourceFromKey(key) {
   return data.dataSource === "claude" ? "claude" : "codex";
 }
 
+function newSessionConfigFromKey(key) {
+  const data = keyConfigFromKey(key);
+  return {
+    projectPath: typeof data.projectPath === "string" ? data.projectPath.trim() : "",
+    prompt: typeof data.prompt === "string" ? data.prompt : "",
+    mode: typeof data.mode === "string" ? data.mode : "",
+  };
+}
+
 function firstArray(...values) {
   for (const value of values) {
     if (Array.isArray(value)) return value;
@@ -121,6 +130,7 @@ module.exports = {
   extractInteractionKey,
   extractLoadedKeys,
   languageFromPayload,
+  newSessionConfigFromKey,
   sessionTitleModeFromKey,
   tokenDisplayModeFromKey,
 };

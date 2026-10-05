@@ -8,6 +8,7 @@ const {
   extractInteractionKey,
   extractLoadedKeys,
   languageFromPayload,
+  newSessionConfigFromKey,
   sessionTitleModeFromKey,
   tokenDisplayModeFromKey,
 } = require("../src/dashboard/pluginEvents");
@@ -76,4 +77,15 @@ test("plugin event adapter extracts host language from common payload shapes", (
   assert.equal(languageFromPayload({ data: { app: { language: "en-US" } } }), "en");
   assert.equal(languageFromPayload({ config: { language: "fr-FR" } }), "en");
   assert.equal(languageFromPayload(null), null);
+});
+
+test("plugin event adapter reads new session config from nested key data", () => {
+  assert.deepEqual(newSessionConfigFromKey({
+    data: { projectPath: " /Users/me/repo ", prompt: "Fix tests", mode: "codex" },
+  }), { projectPath: "/Users/me/repo", prompt: "Fix tests", mode: "codex" });
+  assert.deepEqual(newSessionConfigFromKey({
+    data: { projectPath: "/a", config: { projectPath: "/b" } },
+    config: { mode: "work" },
+  }), { projectPath: "/b", prompt: "", mode: "work" });
+  assert.deepEqual(newSessionConfigFromKey(null), { projectPath: "", prompt: "", mode: "" });
 });

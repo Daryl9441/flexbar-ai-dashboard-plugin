@@ -88,14 +88,18 @@ function renderPlanUsageKey(view, options = {}) {
     const percentWidth = 44;
     const percentGap = 8;
     const percentRight = width - 8;
-    const barX = 52;
+    // The label column fits the widest label (e.g. "Monthly"), within limits.
+    ctx.font = fontSpec("normal", 11);
+    const widestLabel = Math.max(...items.map((item) => ctx.measureText(String(item.label || "")).width));
+    const labelWidth = Math.min(72, Math.max(42, Math.ceil(widestLabel) + 4));
+    const barX = 10 + labelWidth;
     const barWidth = Math.max(40, percentRight - percentWidth - percentGap - barX);
     items.forEach((item, index) => {
       const y = 25 + index * 17;
       drawText(ctx, item.label, 10, y + 8, {
         font: fontSpec("normal", 11),
         color: "#f4f4f5",
-        maxWidth: 42,
+        maxWidth: labelWidth - 2,
       });
       drawRoundedRect(ctx, barX, y, barWidth, 9, 4, "#27272a");
       drawRoundedRect(ctx, barX, y, Math.round(barWidth * (item.remainingPercent / 100)), 9, 4, quotaColor(item.remainingPercent));
@@ -132,7 +136,8 @@ function renderResetTimerKey(view, options = {}) {
     const rInner = 11;
     items.forEach((item, index) => {
       const cx = Math.round((width * (index + 0.5)) / count);
-      const windowMs = Math.max(1, Number(item.windowSeconds) * 1000);
+      // Without a known window length there is no fraction: track only, time still shown.
+      const windowMs = Number(item.windowSeconds) > 0 ? Number(item.windowSeconds) * 1000 : Infinity;
       const remainingMs = Math.max(0, Number(item.resetAtMs) - now);
       const fraction = Math.max(0, Math.min(1, remainingMs / windowMs));
 

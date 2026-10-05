@@ -276,14 +276,14 @@ function resetTimerItems(provider, quota, language) {
       resetAtMs: toEpochMs(limit.resetAt),
       windowSeconds: limit.windowSeconds,
     }))
-    .filter((item) => item.resetAtMs !== null && item.windowSeconds !== null);
+    .filter((item) => item.resetAtMs !== null);
 }
 
 // Names that state their own length (Claude's five_hour / seven_day). Codex's
 // "primary" / "secondary" say nothing about it: a plan may have only a weekly window.
 function namedQuotaWindowSeconds(label) {
   const text = String(label || "");
-  if (/five[_-]?hour|(^|[^0-9])5h/i.test(text)) return 5 * 60 * 60;
+  if (/five[_-]?hour|(^|[^0-9a-z])5h($|[^0-9a-z])/i.test(text)) return 5 * 60 * 60;
   if (/seven[_-]?day|week/i.test(text)) return 7 * 24 * 60 * 60;
   return null;
 }
@@ -293,6 +293,7 @@ function quotaWindowLabel(windowSeconds, language) {
   const seconds = Number(windowSeconds);
   if (!Number.isFinite(seconds) || seconds <= 0) return t(language, "quotaUsage");
   const minutes = Math.round(seconds / 60);
+  if (minutes < 1) return t(language, "quotaUsage");
   const days = minutes / (24 * 60);
   if (days === 7) return t(language, "quotaWeekly");
   if (days === 1) return t(language, "quotaDaily");
@@ -346,19 +347,27 @@ function extractQuotaLimits(quota) {
   return [];
 }
 
+// One item per window length: copies of a window (rateLimits vs rateLimitsByLimitId,
+// model-specific limits) collapse and keep the highest usage. A copy without a length
+// joins the window of the same name that has one; shortest windows come first.
 function dedupeQuotaLimits(limits) {
-  const byLabel = new Map();
+  const lengthByName = new Map();
+  for (const limit of limits) {
+    const name = canonicalQuotaLabel(limit.label);
+    if (limit.windowSeconds && !lengthByName.has(name)) lengthByName.set(name, limit.windowSeconds);
+  }
+
+  const byWindow = new Map();
   for (const limit of limits) {
     const label = canonicalQuotaLabel(limit.label);
-    // The same window reported twice (e.g. rateLimits and rateLimitsByLimitId.codex)
-    // collapses; windows of different lengths never do.
-    const key = `${label}:${limit.windowSeconds || ""}`;
-    const existing = byLabel.get(key);
+    const windowSeconds = limit.windowSeconds || lengthByName.get(label) || null;
+    const key = windowSeconds ? `w:${windowSeconds}` : `n:${label}`;
+    const existing = byWindow.get(key);
     if (!existing || Number(limit.usedPercent || 0) > Number(existing.usedPercent || 0)) {
-      byLabel.set(key, { ...limit, label });
+      byWindow.set(key, { ...limit, label, windowSeconds });
     }
   }
-  return Array.from(byLabel.values());
+  return Array.from(byWindow.values()).sort((a, b) => (a.windowSeconds || Infinity) - (b.windowSeconds || Infinity));
 }
 
 function canonicalQuotaLabel(label) {

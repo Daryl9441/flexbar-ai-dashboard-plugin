@@ -84,7 +84,7 @@ const MESSAGES = {
     quotaDaily: "\u6bcf\u65e5",
     quotaDays: "{n}\u5929",
     quotaHours: "{n}\u5c0f\u65f6",
-    quotaMinutes: "{n}\u5206",
+    quotaMinutes: "{n}\u5206\u949f",
     quotaMonthly: "\u6bcf\u6708",
     quotaUsage: "\u7528\u91cf",
     quotaWeekly: "\u6bcf\u5468",

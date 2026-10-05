@@ -396,7 +396,8 @@ test("plan usage stays neutral when a window's length is unknown", () => {
   }, createDashboardState(), { sessionSlots: 0, language: "zh" });
 
   assert.deepEqual(model.planUsage.items.map((item) => item.label), ["\u7528\u91cf"]);
-  assert.deepEqual(model.resetTimer.items, [], "no countdown ring without a known window length");
+  assert.deepEqual(model.resetTimer.items.map((item) => [item.label, item.windowSeconds]), [["\u7528\u91cf", null]],
+    "the countdown is still shown; the ring needs a window length");
 });
 
 test("quota window labels cover hours, days, weekly and monthly in both languages", () => {
@@ -407,7 +408,8 @@ test("quota window labels cover hours, days, weekly and monthly in both language
     [3 * 86400, "3d", "3\u5929"],
     [7 * 86400, "Weekly", "\u6bcf\u5468"],
     [30 * 86400, "Monthly", "\u6bcf\u6708"],
-    [90 * 60, "90m", "90\u5206"],
+    [90 * 60, "90m", "90\u5206\u949f"],
+    [20, "Usage", "\u7528\u91cf"],
     [null, "Usage", "\u7528\u91cf"],
   ];
   for (const [seconds, en, zh] of cases) {
@@ -434,4 +436,35 @@ test("windows of different lengths under the same name are kept apart", () => {
   }, createDashboardState(), { sessionSlots: 0 });
 
   assert.deepEqual(model.planUsage.items.map((item) => [item.label, item.usedPercent]), [["5h", 12], ["Weekly", 50]]);
+});
+
+test("quota windows merge by length: copies collapse, a copy without a length joins its named window", () => {
+  const model = buildDashboardViewModel({
+    providers: {
+      codex: {
+        sessions: [],
+        quota: {
+          limits: [
+            { label: "primary", usedPercent: 17, resetAt: 1791590443 },
+            { label: "codex.primary", usedPercent: 17, resetAt: 1791590443, windowSeconds: 604800 },
+            { label: "codex_other.secondary", usedPercent: 70, resetAt: 1791590443, windowSeconds: 604800 },
+            { label: "codex_other.primary", usedPercent: 40, resetAt: 1778696068, windowSeconds: 18000 },
+          ],
+        },
+      },
+      claude: { sessions: [], quota: null },
+    },
+  }, createDashboardState(), { sessionSlots: 0 });
+
+  assert.deepEqual(model.planUsage.items.map((item) => [item.label, item.usedPercent]), [["5h", 40], ["Weekly", 70]],
+    "one item per window length, shortest first, highest usage kept");
+});
+
+test("named window lengths only match whole tokens", () => {
+  const { namedQuotaWindowSeconds } = require("../src/dashboard/viewModel");
+  assert.equal(namedQuotaWindowSeconds("five_hour"), 18000);
+  assert.equal(namedQuotaWindowSeconds("5h"), 18000);
+  assert.equal(namedQuotaWindowSeconds("seven_day_opus"), 604800);
+  assert.equal(namedQuotaWindowSeconds("gpt-5high"), null);
+  assert.equal(namedQuotaWindowSeconds("primary"), null);
 });

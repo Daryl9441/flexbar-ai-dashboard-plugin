@@ -146,6 +146,29 @@ test("new session key localizes the default project hint", () => {
   assert.ok(fake.texts.includes("\u5e94\u7528\u5f53\u524d\u9879\u76ee"));
 });
 
+test("plan usage label column widens to fit long labels such as Monthly", () => {
+  const narrow = createFakeCanvasModule();
+  renderPlanUsageKey({ items: [{ label: "5h", remainingPercent: 60 }] }, { width: 280, canvasModule: narrow });
+  const wide = createFakeCanvasModule();
+  renderPlanUsageKey({ items: [{ label: "Monthly", remainingPercent: 60 }] }, { width: 280, canvasModule: wide });
+
+  const barX = (fake) => Math.min(...fake.roundedRects.map((rect) => rect.x));
+  assert.equal(barX(narrow), 52, "short labels keep the original layout");
+  assert.ok(barX(wide) >= 10 + "Monthly".length * 8, "the bar starts after the full label");
+  assert.ok(wide.texts.includes("Monthly"), "not truncated");
+});
+
+test("reset timer still counts down a window of unknown length, without a progress arc", () => {
+  const fake = createFakeCanvasModule();
+  const now = 1_000_000_000_000;
+
+  renderResetTimerKey({ items: [{ label: "Usage", resetAtMs: now + 3 * 86400 * 1000, windowSeconds: null }] }, { width: 200, now, canvasModule: fake });
+
+  assert.ok(fake.texts.includes("3d"));
+  assert.ok(fake.texts.includes("Usage"));
+  assert.ok(!fake.fills.includes("#38bdf8"), "no arc without a window length");
+});
+
 test("session key renderer does not draw layout guide borders", () => {
   const fake = createFakeCanvasModule();
 

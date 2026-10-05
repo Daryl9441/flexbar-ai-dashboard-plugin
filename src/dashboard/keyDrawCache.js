@@ -12,14 +12,22 @@ const { describeError, logTo, safeCall } = require("./hostSafety");
 const DEFAULT_RETRY_BASE_MS = 2_000;
 const DEFAULT_RETRY_MAX_MS = 30_000;
 const DEFAULT_PROBE_INTERVAL_MS = 30_000;
-// Even unchanged keys are re-sent this often, in case the device screen was
-// reset without the host telling the plugin (missed reconnect event).
-const DEFAULT_REFRESH_AFTER_MS = 5 * 60_000;
+// Even unchanged keys are re-sent this often, in case the host reset a key to
+// its default look without telling the plugin (missed reconnect or reload
+// event). One draw per key per minute is still far below the old redraw storm
+// of every key every 2 seconds.
+const DEFAULT_REFRESH_AFTER_MS = 60_000;
+// After a device reconnects FlexDesigner reloads its keys (plugin.alive about
+// 0.5s later), which resets them to their default look once more. Draws for
+// that device are held back until the reload, or at most this long, so every
+// key is drawn once instead of twice.
+const DEFAULT_RELOAD_GRACE_MS = 1_500;
 
 const DRAWN = "drawn";
 const UNCHANGED = "unchanged";
 const BACKOFF = "backoff";
 const DISCONNECTED = "disconnected";
+const HELD = "held";
 const FAILED = "failed";
 
 function createKeyDrawCache(options = {}) {
@@ -34,17 +42,18 @@ function createKeyDrawCache(options = {}) {
   const retryMaxMs = positiveNumber(options.retryMaxMs, DEFAULT_RETRY_MAX_MS);
   const probeIntervalMs = positiveNumber(options.probeIntervalMs, DEFAULT_PROBE_INTERVAL_MS);
   const refreshAfterMs = positiveNumber(options.refreshAfterMs, DEFAULT_REFRESH_AFTER_MS);
+  const reloadGraceMs = nonNegativeNumber(options.reloadGraceMs, DEFAULT_RELOAD_GRACE_MS);
   const onDeviceRecovered = typeof options.onDeviceRecovered === "function" ? options.onDeviceRecovered : null;
 
   // serialNumber -> Map(uid -> { signature, sentAt, failures, retryAt })
   const entriesBySerial = new Map();
-  // serialNumber -> { connected, probeAt }
+  // serialNumber -> { connected, probeAt, holdUntil }
   const devices = new Map();
 
   /**
    * Draws a key unless the identical payload was already delivered to it.
    * Never rejects; resolves with what happened:
-   * "drawn" | "unchanged" | "backoff" | "disconnected" | "failed".
+   * "drawn" | "unchanged" | "backoff" | "disconnected" | "held" | "failed".
    */
   function drawKey(serialNumber, key, type = "draw", base64 = null) {
     const uid = keyUid(key);
@@ -64,6 +73,8 @@ function createKeyDrawCache(options = {}) {
     if (previous && previous.retryAt > time) return Promise.resolve(BACKOFF);
 
     const device = devices.get(serialNumber);
+    // Just reconnected: the host is about to reload (and reset) these keys.
+    if (device && device.connected && device.holdUntil > time) return Promise.resolve(HELD);
     const probing = Boolean(device && !device.connected);
     if (probing) {
       if (time < device.probeAt) return Promise.resolve(DISCONNECTED);
@@ -107,7 +118,7 @@ function createKeyDrawCache(options = {}) {
 
   // A probe draw succeeded: keep only the probed key and redraw the rest.
   function recoverDevice(serialNumber, remainingEntries) {
-    devices.set(serialNumber, { connected: true, probeAt: 0 });
+    devices.set(serialNumber, connectedState());
     entriesBySerial.set(serialNumber, remainingEntries);
     logTo(log, "info", `device:${serialNumber}`, [`Device ${serialNumber} accepts draws again; redrawing its keys`]);
     notifyRecovered(serialNumber);
@@ -143,10 +154,13 @@ function createKeyDrawCache(options = {}) {
 
   /**
    * The host reported the device as connected: its screen may have been
-   * reset, so every key of that device must be drawn again.
+   * reset, so every key of that device must be drawn again. FlexDesigner
+   * reloads the device's keys right after a reconnect, so draws are held back
+   * until markKeysLoaded() or for `reloadGraceMs`, whichever comes first; the
+   * caller redraws once the grace period is over in case no reload came.
    */
   function markDeviceConnected(serialNumber) {
-    devices.set(serialNumber, { connected: true, probeAt: 0 });
+    devices.set(serialNumber, connectedState(reloadGraceMs > 0 ? now() + reloadGraceMs : 0));
     invalidateSerial(serialNumber);
   }
 
@@ -155,16 +169,38 @@ function createKeyDrawCache(options = {}) {
    * periodic probe) and make sure everything is redrawn once it returns.
    */
   function markDeviceDisconnected(serialNumber) {
-    devices.set(serialNumber, { connected: false, probeAt: now() + probeIntervalMs });
+    devices.set(serialNumber, { connected: false, probeAt: now() + probeIntervalMs, holdUntil: 0 });
     invalidateSerial(serialNumber);
+  }
+
+  /**
+   * Applies normalized `device.status` entries ([{ serialNumber, status }], see
+   * extractDeviceStatuses) and returns the serial numbers reported as
+   * connected; their keys must be redrawn once `reloadGraceMs` has passed.
+   */
+  function applyDeviceStatuses(statuses) {
+    const connected = [];
+    for (const item of statuses || []) {
+      if (!item || !item.serialNumber) continue;
+      if (item.status === "connected") {
+        markDeviceConnected(item.serialNumber);
+        if (!connected.includes(item.serialNumber)) connected.push(item.serialNumber);
+      } else if (item.status === "disconnected") {
+        markDeviceDisconnected(item.serialNumber);
+      }
+    }
+    return connected;
   }
 
   /** Keys of a device were (re)loaded by plugin.alive / device.newPage. */
   function markKeysLoaded(serialNumber, keys) {
     const device = devices.get(serialNumber);
     if (device && !device.connected) {
-      devices.set(serialNumber, { connected: true, probeAt: 0 });
+      devices.set(serialNumber, connectedState());
       invalidateSerial(serialNumber);
+    } else if (device && device.holdUntil) {
+      // The reload announced by a reconnect has happened: draw right away.
+      device.holdUntil = 0;
     }
     for (const key of keys || []) invalidateKey(serialNumber, key);
   }
@@ -189,6 +225,7 @@ function createKeyDrawCache(options = {}) {
   }
 
   return {
+    applyDeviceStatuses,
     drawKey,
     invalidateAll,
     invalidateKey,
@@ -197,7 +234,13 @@ function createKeyDrawCache(options = {}) {
     markDeviceConnected,
     markDeviceDisconnected,
     markKeysLoaded,
+    refreshAfterMs,
+    reloadGraceMs,
   };
+}
+
+function connectedState(holdUntil = 0) {
+  return { connected: true, probeAt: 0, holdUntil };
 }
 
 /**
@@ -231,12 +274,21 @@ function positiveNumber(value, fallback) {
   return Number.isFinite(number) && number > 0 ? number : fallback;
 }
 
+function nonNegativeNumber(value, fallback) {
+  if (value === undefined || value === null) return fallback;
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : fallback;
+}
+
 module.exports = {
+  DEFAULT_REFRESH_AFTER_MS,
+  DEFAULT_RELOAD_GRACE_MS,
   DRAW_RESULT: {
     BACKOFF,
     DISCONNECTED,
     DRAWN,
     FAILED,
+    HELD,
     UNCHANGED,
   },
   createKeyDrawCache,

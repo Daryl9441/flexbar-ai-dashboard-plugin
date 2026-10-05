@@ -58,8 +58,14 @@ function createRateLimitedLogger(logger, options = {}) {
  * `{ ok: true, value }` or `{ ok: false, error }`. Synchronous throws and
  * promise rejections are both caught and logged through the rate-limited
  * logger, so callers may safely fire and forget the returned promise.
+ *
+ * With `options.timeoutMs` it resolves with `{ ok: false, error, timedOut: true }`
+ * once that much time has passed without an answer. Some SDK calls (getConfig,
+ * setConfig) are sent with no timeout at all and never settle when the host
+ * does not answer; a late answer after the timeout is ignored.
  */
 function safeCall(label, task, options = {}) {
+  let timedOut = false;
   const report = (error) => {
     reportFailure(label, error, options);
     return { ok: false, error };
@@ -72,7 +78,50 @@ function safeCall(label, task, options = {}) {
     return Promise.resolve(report(error));
   }
 
-  return Promise.resolve(result).then((value) => ({ ok: true, value }), report);
+  const outcome = Promise.resolve(result).then(
+    (value) => ({ ok: true, value }),
+    (error) => (timedOut ? { ok: false, error } : report(error))
+  );
+  const timeoutMs = Number(options.timeoutMs);
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return outcome;
+
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      timedOut = true;
+      resolve({ ...report(createTimeoutError(label, timeoutMs)), timedOut: true });
+    }, timeoutMs);
+    outcome.then((value) => {
+      clearTimeout(timer);
+      resolve(value);
+    });
+  });
+}
+
+/**
+ * Waits for `promise` to settle, but never longer than `timeoutMs`. Resolves
+ * with true when it settled in time and false otherwise; never rejects.
+ */
+function waitAtMost(promise, timeoutMs) {
+  const ms = Number(timeoutMs);
+  if (!Number.isFinite(ms) || ms <= 0) return Promise.resolve(false);
+
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), ms);
+    Promise.resolve(promise).then(
+      () => true,
+      () => true
+    ).then((settled) => {
+      clearTimeout(timer);
+      resolve(settled);
+    });
+  });
+}
+
+function createTimeoutError(label, timeoutMs) {
+  const error = new Error(`${label} got no answer within ${timeoutMs}ms`);
+  error.name = "TimeoutError";
+  error.code = "ETIMEDOUT";
+  return error;
 }
 
 /**
@@ -164,4 +213,5 @@ module.exports = {
   installUnhandledRejectionGuard,
   logTo,
   safeCall,
+  waitAtMost,
 };

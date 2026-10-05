@@ -1201,11 +1201,14 @@ async function collectCodexSnapshot(options = {}) {
   const latestSessionFile = latestFile(files);
   const latestEvents = latestSessionFile ? readJsonlTail(latestSessionFile, options.maxLines || CODEX_SESSION_TAIL_LINES) : [];
   const usedTails = new Set(latestSessionFile ? [latestSessionFile] : []);
-  const rawSessions = appServer && appServer.threads.length > 0
+  const fromAppServer = Boolean(appServer && appServer.threads.length > 0);
+  const rawSessions = fromAppServer
     ? attachCodexThreadActivity(mergeRecentCodexRollouts(appServer.threads, files, codexHome, { now }), { now, cache: tailCache, usedPaths: usedTails })
     : readCodexSessionsFromFiles(files, codexHome, { includeUsage });
   const latestTurnEvents = latestSessionFile ? readCodexThreadTail(latestSessionFile, { cache: tailCache }) : [];
-  pruneCache(tailCache, usedTails);
+  // A poll that fell back to reading files (app-server briefly unavailable) does not
+  // know which threads are in use, so it keeps the cache for the next normal poll.
+  if (fromAppServer) pruneCache(tailCache, usedTails);
   const latestFileSession = buildCodexFileSession(latestSessionFile, latestEvents, { includeUsage, activityEvents: latestTurnEvents, now });
   const activeSession = chooseActiveCodexSession(rawSessions, latestFileSession);
   const sessions = attachCodexSessionDetails(rawSessions, activeSession);

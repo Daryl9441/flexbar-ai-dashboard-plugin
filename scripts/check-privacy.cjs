@@ -169,7 +169,7 @@ function looksLikeSecret(value) {
 
 function isPlaceholderUser(name, rest = "") {
   const lower = name.toLowerCase();
-  // "…" marks an elided or masked name ("/Users/…", "/Users/da…"), as in this script's own reports.
+  // "…" marks an elided or masked name ("/Users/…", "/Users/al…"), as in this script's own reports.
   if (name.length <= 1 || /^\.+$/.test(name) || name.includes("…") || PLACEHOLDER_USERS.has(lower)) return true;
   const nextWord = /^ ([^\s/\\"'`]+)/.exec(rest); // "/Users/Jane Doe/..."
   return Boolean(nextWord) && PLACEHOLDER_USERS.has(`${lower} ${nextWord[1].toLowerCase()}`);

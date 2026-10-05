@@ -192,10 +192,35 @@ function renderSessionKey(view, options = {}) {
 }
 
 const OVERVIEW_ROWS = 3;
-const OVERVIEW_MIN_COLUMN_WIDTH = 150;
+const OVERVIEW_ROW_GAP = 18;
+const OVERVIEW_PADDING = 8;
+const OVERVIEW_MIN_COLUMN_WIDTH = 110;
+const OVERVIEW_WIDE_COLUMN_WIDTH = 150;
 
-// Session overview: one dot + title per session in a 3-row grid that fills columns
-// left to right; the dot color says whether the session is still running.
+// Grid of a session overview key: as many 3-row columns of at least 110px as the
+// key holds; when the sessions do not all fit, the last slot shows "+N". Only as
+// many columns as the sessions need are used, so a few titles get wide columns.
+function sessionOverviewLayout(width, itemCount) {
+  const inner = keyCanvasWidth(width) - OVERVIEW_PADDING * 2;
+  const count = Math.max(0, Math.floor(Number(itemCount) || 0));
+  const maxColumns = Math.max(1, Math.floor(inner / OVERVIEW_MIN_COLUMN_WIDTH));
+  const capacity = maxColumns * OVERVIEW_ROWS;
+  const visibleCount = count > capacity ? capacity - 1 : count;
+  const columns = Math.min(maxColumns, Math.max(1, Math.ceil(count / OVERVIEW_ROWS)));
+  const columnWidth = inner / columns;
+  return {
+    columns,
+    columnWidth,
+    capacity,
+    visibleCount,
+    hiddenCount: count - visibleCount,
+    rows: Math.max(1, Math.min(OVERVIEW_ROWS, count)),
+    fontSize: columnWidth >= OVERVIEW_WIDE_COLUMN_WIDTH ? 13 : 12,
+  };
+}
+
+// Session overview: a status dot + title per session, filling columns top to
+// bottom; blue = running, orange = awaiting approval, green = done.
 function renderSessionOverviewKey(view, options = {}) {
   const language = normalizeLanguage(options.language);
   return renderKey(options, (ctx, width) => {
@@ -212,34 +237,36 @@ function renderSessionOverviewKey(view, options = {}) {
       return;
     }
 
-    const padding = 8;
-    const columns = Math.max(1, Math.floor((width - padding * 2) / OVERVIEW_MIN_COLUMN_WIDTH));
-    const columnWidth = (width - padding * 2) / columns;
-    const capacity = columns * OVERVIEW_ROWS;
-    const overflow = items.length > capacity ? items.length - (capacity - 1) : 0;
-    const visible = overflow ? items.slice(0, capacity - 1) : items;
-    const rowY = (row) => 12 + row * 18;
+    const layout = sessionOverviewLayout(width, items.length);
+    const { columnWidth, fontSize } = layout;
+    // Rows are centered vertically, so one or two sessions do not hug the top edge.
+    const firstRowY = HEIGHT / 2 - ((layout.rows - 1) * OVERVIEW_ROW_GAP) / 2;
+    const slot = (index) => ({
+      x: OVERVIEW_PADDING + Math.floor(index / OVERVIEW_ROWS) * columnWidth,
+      y: firstRowY + (index % OVERVIEW_ROWS) * OVERVIEW_ROW_GAP,
+    });
+    const baseline = (y) => y + Math.round(fontSize * 0.35 * 2) / 2;
+    const textMaxWidth = columnWidth - 21;
 
-    visible.forEach((item, index) => {
-      const column = Math.floor(index / OVERVIEW_ROWS);
-      const row = index % OVERVIEW_ROWS;
-      const x = padding + column * columnWidth;
-      const y = rowY(row);
+    items.slice(0, layout.visibleCount).forEach((item, index) => {
+      const { x, y } = slot(index);
+      const done = item.status === "done";
       drawStatusLight(ctx, x + 5, y, item.statusColor, 4.5);
-      drawText(ctx, item.title || t(language, "untitled"), x + 15, y + 4.5, {
-        font: fontSpec(item.status === "done" ? "normal" : "bold", 13),
-        color: item.status === "done" ? "#d4d4d8" : "#ffffff",
-        maxWidth: columnWidth - 21,
+      drawText(ctx, item.title || t(language, "untitled"), x + 15, baseline(y), {
+        font: fontSpec(done ? "normal" : "bold", fontSize),
+        color: done ? "#d4d4d8" : "#ffffff",
+        maxWidth: textMaxWidth,
       });
     });
 
-    if (overflow) {
-      const index = capacity - 1;
-      const x = padding + Math.floor(index / OVERVIEW_ROWS) * columnWidth;
-      drawText(ctx, `+${overflow}`, x + 15, rowY(index % OVERVIEW_ROWS) + 4.5, {
-        font: fontSpec("bold", 13),
-        color: "#a1a1aa",
-        maxWidth: columnWidth - 21,
+    if (layout.hiddenCount > 0) {
+      // Blue while "+N" hides a session that is still running or waiting.
+      const hidesActive = items.slice(layout.visibleCount).some((item) => item.status !== "done");
+      const { x, y } = slot(layout.capacity - 1);
+      drawText(ctx, `+${layout.hiddenCount}`, x + 15, baseline(y), {
+        font: fontSpec("bold", fontSize),
+        color: hidesActive ? STATUS_COLORS.blue : "#a1a1aa",
+        maxWidth: textMaxWidth,
       });
     }
   });
@@ -293,8 +320,12 @@ function renderNewSessionKey(view, options = {}) {
   });
 }
 
+function keyCanvasWidth(width) {
+  return Math.max(60, Math.round(Number(width) || 240));
+}
+
 function renderKey(options, draw) {
-  const width = Math.max(60, Math.round(Number(options.width) || 240));
+  const width = keyCanvasWidth(options.width);
   const canvasModule = options.canvasModule === undefined ? loadCanvasModule() : options.canvasModule;
   if (!canvasModule || typeof canvasModule.createCanvas !== "function") {
     throw new Error("@napi-rs/canvas is required to render Flexbar PNG key images");
@@ -327,13 +358,15 @@ function drawLabel(ctx, label, x, y) {
   });
 }
 
+const STATUS_COLORS = {
+  orange: "#f97316",
+  green: "#22c55e",
+  blue: "#38bdf8",
+  gray: "#71717a",
+};
+
 function drawStatusLight(ctx, x, y, colorName, radius = 6) {
-  const fill = {
-    orange: "#f97316",
-    green: "#22c55e",
-    blue: "#38bdf8",
-    gray: "#71717a",
-  }[colorName] || "#71717a";
+  const fill = STATUS_COLORS[colorName] || STATUS_COLORS.gray;
 
   ctx.beginPath();
   ctx.fillStyle = fill;
@@ -463,6 +496,7 @@ module.exports = {
   renderSessionOverviewKey,
   renderSkillKey,
   renderTokenUsageKey,
+  sessionOverviewLayout,
   fontSpec,
   quotaColor,
   tokenBarColor,

@@ -162,6 +162,27 @@ test("dashboard marks approval sessions orange and finished-unread sessions gree
   assert.equal(model.sessions[0].statusColor, "gray");
 });
 
+test("dashboard does not count a running session the collector could not read as finished", () => {
+  const state = createDashboardState();
+  const snapshotWith = (activity) => ({
+    providers: {
+      codex: { sessions: [{ id: "s1", title: "Long task", updatedAt: "2026-05-13T08:00:00.000Z", activity }] },
+      claude: { sessions: [] },
+    },
+  });
+  const statusOf = (activity) => buildDashboardViewModel(snapshotWith(activity), state, { sessionSlots: 1 }).sessions[0].status;
+
+  assert.equal(statusOf({ state: "tool", detail: "shell_command" }), "running");
+  // "unknown": no readable events this refresh (e.g. the rollout tail was skipped).
+  assert.equal(statusOf({ state: "unknown", detail: "no session events" }), "idle");
+  assert.equal(state.isUnreadFinished("codex:s1"), false);
+  assert.equal(statusOf({ state: "tool", detail: "shell_command" }), "running");
+
+  // Once it really finishes it is still reported as finished-unread.
+  assert.equal(statusOf({ state: "idle", detail: "task_complete" }), "finished-unread");
+  assert.equal(statusOf({ state: "unknown", detail: "no session events" }), "finished-unread");
+});
+
 test("dashboard plan usage exposes remaining percentages for 5h and weekly windows", () => {
   const model = buildDashboardViewModel({
     providers: {

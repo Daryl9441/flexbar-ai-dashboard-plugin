@@ -17,6 +17,7 @@ const {
   renderSessionKey,
   renderSessionOverviewKey,
   renderTokenUsageKey,
+  sessionOverviewLayout,
 } = require("./dashboard/render");
 const {
   dataSourceFromKey,
@@ -705,9 +706,11 @@ function forgetSessionOverview(uid) {
 
 function drawSessionOverviewKey(item, overview) {
   const view = applyOverviewTitleMode(overview || { items: [], runningCount: 0, doneCount: 0 }, sessionTitleModeFromKey(item.key));
+  // Finished sessions hidden behind "+N" were never shown: they stay unread.
+  const { visibleCount } = sessionOverviewLayout(keyWidth(item.key), view.items.length);
   overviewDoneSessionsByKey.set(
     item.key.uid,
-    view.items.filter((entry) => entry.status === "done").map((entry) => entry.sessionKey)
+    view.items.slice(0, visibleCount).filter((entry) => entry.status === "done").map((entry) => entry.sessionKey)
   );
   assignedSessionByKey.delete(item.key.uid);
   drawImageKey(item.serialNumber, item.key, view, renderSessionOverviewKey, sessionOverviewFallbackTitle(view));

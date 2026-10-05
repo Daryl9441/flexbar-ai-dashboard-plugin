@@ -1138,6 +1138,7 @@ function collectQuotaLimits(raw) {
           usedPercent,
           resetAt,
           window: value.window_name || value.windowName || null,
+          windowSeconds: quotaWindowSeconds(value),
         });
       }
       return;
@@ -1152,6 +1153,15 @@ function collectQuotaLimits(raw) {
 
   visit(raw, []);
   return limits;
+}
+
+// Window length as reported: app-server windowDurationMins (e.g. 300 = 5 h, 10080 =
+// 7 days), the ChatGPT usage endpoint's limit_window_seconds, or similar spellings.
+function quotaWindowSeconds(value) {
+  const minutes = numberOrNull(value.windowDurationMins ?? value.window_duration_mins ?? value.window_minutes ?? value.windowMinutes);
+  if (minutes !== null && minutes > 0) return Math.round(minutes * 60);
+  const seconds = numberOrNull(value.limit_window_seconds ?? value.limitWindowSeconds ?? value.window_seconds ?? value.windowSeconds);
+  return seconds !== null && seconds > 0 ? Math.round(seconds) : null;
 }
 
 function cleanQuotaPath(pathParts) {

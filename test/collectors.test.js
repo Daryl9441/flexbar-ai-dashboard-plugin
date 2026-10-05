@@ -923,3 +923,22 @@ test("Codex reasoning summaries drop markdown bold markers", () => {
   assert.equal(summarizeReasoning({ payload: { summary: [{ text: "**Updating tests**" }] } }), "Updating tests");
   assert.equal(summarizeReasoning({ payload: { text: "Plain text" } }), "Plain text");
 });
+
+test("Codex quota limits keep each window's length from app-server and the usage endpoint", () => {
+  const { normalizeCodexQuota } = require("../src/collectors/codex");
+  const appServer = normalizeCodexQuota({
+    rateLimits: {
+      primary: { usedPercent: 20, windowDurationMins: 300, resetsAt: 1778696068 },
+      secondary: { usedPercent: 5, windowDurationMins: 10080, resetsAt: 1779189630 },
+    },
+  });
+  assert.deepEqual(appServer.limits.map((limit) => [limit.label, limit.windowSeconds]), [["primary", 18000], ["secondary", 604800]]);
+
+  const usageEndpoint = normalizeCodexQuota({
+    rate_limit: {
+      primary_window: { used_percent: 17, limit_window_seconds: 604800, reset_at: 1791590443 },
+      secondary_window: null,
+    },
+  });
+  assert.deepEqual(usageEndpoint.limits.map((limit) => [limit.label, limit.windowSeconds]), [["primary", 604800]]);
+});

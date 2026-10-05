@@ -91,7 +91,7 @@ test("monitor formatter prints session title, status, and current action only", 
   assert.match(output, /AI session monitor/);
   assert.match(output, /Codex/);
   assert.match(output, /总用量 1\.2k/);
-  assert.match(output, /订阅用量 5h 42%/);
+  assert.match(output, /订阅用量 5小时 42%/);
   assert.match(output, /Build dashboard/);
   assert.match(output, /运行中/);
   assert.match(output, /正在运行命令: node --test/);
@@ -139,10 +139,10 @@ test("monitor formatter deduplicates Codex quota and formats reset epochs", () =
         sessions: [],
         quota: {
           limits: [
-            { label: "primary", usedPercent: 6, resetAt: 1778696068 },
-            { label: "secondary", usedPercent: 8, resetAt: 1779189630 },
-            { label: "codex.primary", usedPercent: 6, resetAt: 1778696068 },
-            { label: "codex_bengalfox.primary", usedPercent: 0, resetAt: 1778699999 },
+            { label: "primary", usedPercent: 6, resetAt: 1778696068, windowSeconds: 18000 },
+            { label: "secondary", usedPercent: 8, resetAt: 1779189630, windowSeconds: 604800 },
+            { label: "codex.primary", usedPercent: 6, resetAt: 1778696068, windowSeconds: 18000 },
+            { label: "codex_bengalfox.primary", usedPercent: 0, resetAt: 1778699999, windowSeconds: 18000 },
           ],
         },
       },

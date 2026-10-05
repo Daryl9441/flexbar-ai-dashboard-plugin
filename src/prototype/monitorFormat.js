@@ -1,5 +1,7 @@
 "use strict";
 
+const { namedQuotaWindowSeconds, quotaWindowLabel } = require("../dashboard/viewModel");
+
 function formatMonitorSnapshot(snapshot) {
   const lines = [];
   lines.push("AI session monitor");
@@ -190,7 +192,7 @@ function formatSubscriptionUsage(quota) {
   if (limits.length === 0) return "unavailable";
 
   return limits.map((limit) => {
-    const label = humanQuotaLabel(limit.label || limit.id || "limit");
+    const label = humanQuotaLabel(limit);
     const percent = Number.isFinite(Number(limit.usedPercent))
       ? `${Math.round(Number(limit.usedPercent))}%`
       : "?";
@@ -204,9 +206,10 @@ function dedupeQuotaLimits(limits) {
   for (const limit of limits) {
     const canonicalLabel = canonicalQuotaLabel(limit.label || limit.id || "");
     const label = canonicalLabel || limit.label;
-    const existing = byLabel.get(label);
+    const key = `${label}:${limit.windowSeconds || ""}`;
+    const existing = byLabel.get(key);
     if (!existing || Number(limit.usedPercent || 0) > Number(existing.usedPercent || 0)) {
-      byLabel.set(label, { ...limit, label });
+      byLabel.set(key, { ...limit, label });
     }
   }
 
@@ -220,11 +223,13 @@ function canonicalQuotaLabel(label) {
   return text;
 }
 
-function humanQuotaLabel(label) {
-  if (label === "primary") return "5小时";
-  if (label === "secondary") return "每周";
-  if (label === "five_hour") return "5小时";
-  if (label === "seven_day") return "每周";
+// Named by the window's actual length; Codex's primary/secondary alone do not give it
+// (a plan may have only a weekly window), so those fall back to a neutral label.
+function humanQuotaLabel(limit) {
+  const label = limit.label || limit.id || "limit";
+  const seconds = Number(limit.windowSeconds) > 0 ? Number(limit.windowSeconds) : namedQuotaWindowSeconds(label);
+  if (seconds) return quotaWindowLabel(seconds, "zh");
+  if (label === "primary" || label === "secondary") return quotaWindowLabel(null, "zh");
   return label;
 }
 
@@ -244,6 +249,7 @@ function extractQuotaLimits(quota) {
       label: limit.label || limit.id || limit.window,
       usedPercent: limit.usedPercent,
       resetAt: limit.resetAt,
+      windowSeconds: Number(limit.windowSeconds) > 0 ? Number(limit.windowSeconds) : namedQuotaWindowSeconds(limit.label || limit.id || limit.window),
     })).filter((limit) => limit.usedPercent !== undefined || limit.resetAt);
   }
 
@@ -255,6 +261,7 @@ function extractQuotaLimits(quota) {
         label: key,
         usedPercent: value.used_percentage ?? value.usedPercent ?? value.utilization,
         resetAt: value.resets_at ?? value.reset_at ?? value.resetAt,
+        windowSeconds: namedQuotaWindowSeconds(key),
       };
     }).filter(Boolean).filter((limit) => limit.usedPercent !== undefined || limit.resetAt);
   }

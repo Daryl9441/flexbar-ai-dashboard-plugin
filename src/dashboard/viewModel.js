@@ -231,8 +231,8 @@ function buildTotalTokensView(snapshot, language) {
 function buildPlanUsageView(snapshot, language) {
   const providers = snapshot && snapshot.providers || {};
   const items = [
-    ...quotaItems("Codex", providers.codex && providers.codex.quota),
-    ...quotaItems("Claude", providers.claude && providers.claude.quota),
+    ...quotaItems("Codex", providers.codex && providers.codex.quota, language),
+    ...quotaItems("Claude", providers.claude && providers.claude.quota, language),
   ];
 
   return {
@@ -242,12 +242,12 @@ function buildPlanUsageView(snapshot, language) {
   };
 }
 
-function quotaItems(provider, quota) {
+function quotaItems(provider, quota, language) {
   return dedupeQuotaLimits(extractQuotaLimits(quota)).map((limit) => {
     const usedPercent = clampPercent(limit.usedPercent);
     return {
       provider,
-      label: humanQuotaLabel(limit.label),
+      label: quotaWindowLabel(limit.windowSeconds, language),
       usedPercent,
       remainingPercent: clampPercent(100 - usedPercent),
       resetAt: limit.resetAt,
@@ -258,8 +258,8 @@ function quotaItems(provider, quota) {
 function buildResetTimerView(snapshot, language) {
   const providers = snapshot && snapshot.providers || {};
   const items = [
-    ...resetTimerItems("Codex", providers.codex && providers.codex.quota),
-    ...resetTimerItems("Claude", providers.claude && providers.claude.quota),
+    ...resetTimerItems("Codex", providers.codex && providers.codex.quota, language),
+    ...resetTimerItems("Claude", providers.claude && providers.claude.quota, language),
   ];
 
   return {
@@ -268,21 +268,38 @@ function buildResetTimerView(snapshot, language) {
   };
 }
 
-function resetTimerItems(provider, quota) {
+function resetTimerItems(provider, quota, language) {
   return dedupeQuotaLimits(extractQuotaLimits(quota))
     .map((limit) => ({
       provider,
-      label: humanQuotaLabel(limit.label),
+      label: quotaWindowLabel(limit.windowSeconds, language),
       resetAtMs: toEpochMs(limit.resetAt),
-      windowSeconds: windowSecondsForLabel(limit.label),
+      windowSeconds: limit.windowSeconds,
     }))
     .filter((item) => item.resetAtMs !== null && item.windowSeconds !== null);
 }
 
-function windowSecondsForLabel(label) {
-  if (label === "primary") return 5 * 60 * 60;
-  if (label === "secondary") return 7 * 24 * 60 * 60;
+// Names that state their own length (Claude's five_hour / seven_day). Codex's
+// "primary" / "secondary" say nothing about it: a plan may have only a weekly window.
+function namedQuotaWindowSeconds(label) {
+  const text = String(label || "");
+  if (/five[_-]?hour|(^|[^0-9])5h/i.test(text)) return 5 * 60 * 60;
+  if (/seven[_-]?day|week/i.test(text)) return 7 * 24 * 60 * 60;
   return null;
+}
+
+// Labels a limit by its actual window length; "Usage" when the source does not say.
+function quotaWindowLabel(windowSeconds, language) {
+  const seconds = Number(windowSeconds);
+  if (!Number.isFinite(seconds) || seconds <= 0) return t(language, "quotaUsage");
+  const minutes = Math.round(seconds / 60);
+  const days = minutes / (24 * 60);
+  if (days === 7) return t(language, "quotaWeekly");
+  if (days === 1) return t(language, "quotaDaily");
+  if (days >= 28 && days <= 31) return t(language, "quotaMonthly");
+  if (Number.isInteger(days)) return t(language, "quotaDays").replace("{n}", String(days));
+  if (minutes % 60 === 0) return t(language, "quotaHours").replace("{n}", String(minutes / 60));
+  return t(language, "quotaMinutes").replace("{n}", String(minutes));
 }
 
 function toEpochMs(resetAt) {
@@ -305,6 +322,7 @@ function extractQuotaLimits(quota) {
         label: limit.label || limit.id || limit.window,
         usedPercent: limit.usedPercent,
         resetAt: limit.resetAt,
+        windowSeconds: positiveNumberOrNull(limit.windowSeconds) ?? namedQuotaWindowSeconds(limit.label || limit.id || limit.window),
       }))
       .filter((limit) => limit.usedPercent !== undefined || limit.resetAt);
   }
@@ -318,6 +336,7 @@ function extractQuotaLimits(quota) {
           label: key,
           usedPercent: value.used_percentage ?? value.usedPercent ?? value.utilization,
           resetAt: value.resets_at ?? value.reset_at ?? value.resetAt,
+          windowSeconds: namedQuotaWindowSeconds(key),
         };
       })
       .filter(Boolean)
@@ -331,9 +350,12 @@ function dedupeQuotaLimits(limits) {
   const byLabel = new Map();
   for (const limit of limits) {
     const label = canonicalQuotaLabel(limit.label);
-    const existing = byLabel.get(label);
+    // The same window reported twice (e.g. rateLimits and rateLimitsByLimitId.codex)
+    // collapses; windows of different lengths never do.
+    const key = `${label}:${limit.windowSeconds || ""}`;
+    const existing = byLabel.get(key);
     if (!existing || Number(limit.usedPercent || 0) > Number(existing.usedPercent || 0)) {
-      byLabel.set(label, { ...limit, label });
+      byLabel.set(key, { ...limit, label });
     }
   }
   return Array.from(byLabel.values());
@@ -346,10 +368,9 @@ function canonicalQuotaLabel(label) {
   return text || "limit";
 }
 
-function humanQuotaLabel(label) {
-  if (label === "primary") return "5h";
-  if (label === "secondary") return "Weekly";
-  return String(label || "Plan");
+function positiveNumberOrNull(value) {
+  const number = Number(value);
+  return value !== null && value !== undefined && Number.isFinite(number) && number > 0 ? number : null;
 }
 
 function averageRemaining(items) {
@@ -569,5 +590,7 @@ module.exports = {
   applyOverviewTitleMode,
   applySessionTitleMode,
   formatActivityText,
+  namedQuotaWindowSeconds,
+  quotaWindowLabel,
   rankSessions,
 };

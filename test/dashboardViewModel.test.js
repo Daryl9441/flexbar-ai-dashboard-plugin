@@ -190,8 +190,8 @@ test("dashboard plan usage exposes remaining percentages for 5h and weekly windo
         sessions: [],
         quota: {
           limits: [
-            { label: "primary", usedPercent: 8, resetAt: 1778696068 },
-            { label: "secondary", usedPercent: 35, resetAt: 1779189630 },
+            { label: "primary", usedPercent: 8, resetAt: 1778696068, windowSeconds: 18000 },
+            { label: "secondary", usedPercent: 35, resetAt: 1779189630, windowSeconds: 604800 },
           ],
         },
       },
@@ -225,8 +225,8 @@ test("dashboard reset timer exposes reset timestamps and window lengths for 5h a
         sessions: [],
         quota: {
           limits: [
-            { label: "primary", usedPercent: 8, resetAt: 1778696068 },
-            { label: "secondary", usedPercent: 35, resetAt: 1779189630 },
+            { label: "primary", usedPercent: 8, resetAt: 1778696068, windowSeconds: 18000 },
+            { label: "secondary", usedPercent: 35, resetAt: 1779189630, windowSeconds: 604800 },
           ],
         },
       },
@@ -362,3 +362,76 @@ function session(id, title, updatedAt, state, totalTokens, archived = false) {
     usage: { latestTurn: { totalTokens } },
   };
 }
+
+test("plan usage and reset timer name windows by their real length, not by primary/secondary", () => {
+  // A plan with only a weekly Codex window, as codex app-server reports it: primary is 7 days, no secondary.
+  const { normalizeCodexQuota } = require("../src/collectors/codex");
+  const quota = normalizeCodexQuota({
+    rateLimits: {
+      limitId: "codex",
+      primary: { usedPercent: 17, windowDurationMins: 10080, resetsAt: 1791590443 },
+      secondary: null,
+      planType: "pro",
+    },
+    rateLimitsByLimitId: {
+      codex: { limitId: "codex", primary: { usedPercent: 17, windowDurationMins: 10080, resetsAt: 1791590443 }, secondary: null },
+    },
+  });
+  const snapshot = { providers: { codex: { sessions: [], quota }, claude: { sessions: [], quota: null } } };
+
+  const en = buildDashboardViewModel(snapshot, createDashboardState(), { sessionSlots: 0 });
+  assert.deepEqual(en.planUsage.items.map((item) => [item.label, item.remainingPercent]), [["Weekly", 83]]);
+  assert.deepEqual(en.resetTimer.items.map((item) => [item.label, item.windowSeconds]), [["Weekly", 604800]]);
+
+  const zh = buildDashboardViewModel(snapshot, createDashboardState(), { sessionSlots: 0, language: "zh-CN" });
+  assert.deepEqual(zh.planUsage.items.map((item) => item.label), ["\u6bcf\u5468"]);
+});
+
+test("plan usage stays neutral when a window's length is unknown", () => {
+  const model = buildDashboardViewModel({
+    providers: {
+      codex: { sessions: [], quota: { limits: [{ label: "primary", usedPercent: 40, resetAt: 1778696068 }] } },
+      claude: { sessions: [], quota: null },
+    },
+  }, createDashboardState(), { sessionSlots: 0, language: "zh" });
+
+  assert.deepEqual(model.planUsage.items.map((item) => item.label), ["\u7528\u91cf"]);
+  assert.deepEqual(model.resetTimer.items, [], "no countdown ring without a known window length");
+});
+
+test("quota window labels cover hours, days, weekly and monthly in both languages", () => {
+  const { quotaWindowLabel } = require("../src/dashboard/viewModel");
+  const cases = [
+    [5 * 3600, "5h", "5\u5c0f\u65f6"],
+    [86400, "Daily", "\u6bcf\u65e5"],
+    [3 * 86400, "3d", "3\u5929"],
+    [7 * 86400, "Weekly", "\u6bcf\u5468"],
+    [30 * 86400, "Monthly", "\u6bcf\u6708"],
+    [90 * 60, "90m", "90\u5206"],
+    [null, "Usage", "\u7528\u91cf"],
+  ];
+  for (const [seconds, en, zh] of cases) {
+    assert.equal(quotaWindowLabel(seconds, "en"), en, String(seconds));
+    assert.equal(quotaWindowLabel(seconds, "zh"), zh, String(seconds));
+  }
+});
+
+test("windows of different lengths under the same name are kept apart", () => {
+  const model = buildDashboardViewModel({
+    providers: {
+      codex: {
+        sessions: [],
+        quota: {
+          limits: [
+            { label: "primary", usedPercent: 10, resetAt: 1778696068, windowSeconds: 18000 },
+            { label: "codex_other.primary", usedPercent: 50, resetAt: 1779189630, windowSeconds: 604800 },
+            { label: "primary", usedPercent: 12, resetAt: 1778696068, windowSeconds: 18000 },
+          ],
+        },
+      },
+      claude: { sessions: [], quota: null },
+    },
+  }, createDashboardState(), { sessionSlots: 0 });
+
+  assert.deepEqual(model.planUsage.items.map((item) => [item.label, item.usedPercent]), [["5h", 12], ["Weekly", 50]]);
+});

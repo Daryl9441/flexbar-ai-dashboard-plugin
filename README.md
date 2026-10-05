@@ -36,6 +36,7 @@ The default bridge file is `~/.flexbar-ai-dashboard/claude-events.jsonl`. Overri
   - Claude Code progress per session comes from that session's own hook events and transcript: a finished turn (Stop) shows as done, a permission prompt as waiting for approval.
 - **Token Usage**: shows observed local token usage. Supports summary mode and recent chart mode.
 - **Plan Usage**: shows remaining Codex or Claude Code plan / rate-limit windows.
+  - Each bar is labelled by its window's actual length as the provider reports it (e.g. Codex `windowDurationMins` 10080 → **Weekly / 每周**, 300 → **5h / 5小时**), so a plan with only a weekly limit shows "Weekly". When a source does not give the length, the label stays neutral: **Usage / 用量**. The percentage is what remains in that window. / 每个进度条按额度窗口的实际时长命名（如每周、5小时），未知时显示中性的「用量」；百分比为该窗口剩余额度。
 - **Reset Timer**: counts down to the next plan-usage window reset of the selected provider.
 - **New Codex Session**: opens a new thread in the ChatGPT desktop app (see below).
 - **AI Skill**: lets you select a Codex or Claude Code skill. Pressing the key pastes `Use the <skill> skill.` into the current input target.

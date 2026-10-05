@@ -29,6 +29,38 @@ function extractInteractionKey(payload) {
   };
 }
 
+/**
+ * Normalizes `device.status` payloads. FlexDesigner sends an array such as
+ * [{ serialNumber, status: "connected", deviceData }] or
+ * [{ serialNumber, status: "disconnected", _removeDevice: true }].
+ * Returns [{ serialNumber, status: "connected" | "disconnected" }] and drops
+ * entries with an unknown status or no serial number.
+ */
+function extractDeviceStatuses(payload) {
+  let items = Array.isArray(payload)
+    ? payload
+    : firstArray(payload && payload.devices, payload && payload.data && payload.data.devices);
+  if (!Array.isArray(payload) && items.length === 0 && payload && typeof payload === "object") {
+    items = [payload];
+  }
+
+  const statuses = [];
+  for (const item of items) {
+    const serialNumber = item && typeof item === "object" ? item.serialNumber : null;
+    const status = deviceConnectionStatus(item);
+    if (serialNumber && status) statuses.push({ serialNumber, status });
+  }
+  return statuses;
+}
+
+function deviceConnectionStatus(item) {
+  if (!item || typeof item !== "object") return null;
+  if (item._removeDevice === true) return "disconnected";
+  const status = String(item.status || "").toLowerCase();
+  if (status === "connected" || status === "disconnected") return status;
+  return null;
+}
+
 function sessionTitleModeFromKey(key) {
   const data = keyConfigFromKey(key);
   const value = data.sessionTitleMode || data.titleMode;
@@ -85,6 +117,7 @@ function rootConfigFromKey(key) {
 
 module.exports = {
   dataSourceFromKey,
+  extractDeviceStatuses,
   extractInteractionKey,
   extractLoadedKeys,
   languageFromPayload,

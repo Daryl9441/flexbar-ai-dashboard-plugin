@@ -112,7 +112,7 @@ test("bounded JSONL tail drops the line cut by the byte window", (t) => {
   fs.writeFileSync(file, Array.from({ length: 50 }, (_, i) => JSON.stringify({ i, pad: "x".repeat(100) })).join("\n") + "\n");
 
   assert.deepEqual(readJsonlTailBytes(file, { maxBytes: 1_000, maxLines: 5 }).map((entry) => entry.i), [45, 46, 47, 48, 49]);
-  assert.ok(readJsonlTailBytes(file, { maxBytes: 300 }).every((entry) => typeof entry.i === "number"));
+  assert.deepEqual(readJsonlTailBytes(file, { maxBytes: 300 }).map((entry) => entry.i), [48, 49]);
   assert.deepEqual(readJsonlTailBytes(path.join(path.dirname(file), "missing.jsonl")), []);
 });
 
@@ -136,8 +136,8 @@ test("Codex app-server threads get per-thread activity from their recent rollout
     { timestamp: at(50_000), type: "event_msg", payload: { type: "task_complete" } },
   ], 50_000);
   const oldFile = write("old", [
-    { timestamp: at(5 * 3600_000), type: "event_msg", payload: { type: "task_started" } },
-  ], 5 * 3600_000);
+    { timestamp: at(7 * 3600_000), type: "event_msg", payload: { type: "task_started" } },
+  ], 7 * 3600_000);
 
   const cache = new Map();
   const threads = [
@@ -163,7 +163,7 @@ test("Codex app-server threads get per-thread activity from their recent rollout
   assert.equal(cache.has("/no/longer/listed.jsonl"), false);
   assert.equal(again[1].activity.detail, "task_complete");
 
-  assert.equal(attachCodexThreadActivity(threads, { now, cache: new Map(), maxThreads: 1 })[1], threads[1]);
+  assert.equal(attachCodexThreadActivity(threads, { now, cache: new Map(), maxThreads: 1 })[1].activity.state, "unknown");
 });
 
 const FAKE_SDK_HOST = String.raw`

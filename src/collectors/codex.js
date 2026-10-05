@@ -4,17 +4,37 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 const { summarizeReasoning, summarizeToolAction } = require("./actionSummary");
-const { latestFile, readJsonlTail, readJsonlTailBytes, safeMtimeMs, walkJsonlFiles } = require("./jsonl");
+const { latestFile, readJsonlByteRange, readJsonlTail, safeMtimeMs, walkJsonlFiles } = require("./jsonl");
 const { resolveCodexHome } = require("./paths");
 
 const CODEX_ACTIVITY_STALE_MS = 30_000;
 const CODEX_OPEN_TURN_STALE_MS = 30 * 60_000;
 const CODEX_SESSION_TAIL_LINES = 500;
 const RECENT_TOKEN_EVENTS_LIMIT = 10;
-const CODEX_THREAD_ACTIVITY_WINDOW_MS = 2 * 60 * 60_000;
-const CODEX_THREAD_ACTIVITY_MAX = 12;
+// Rollouts written within this window get per-thread activity (an approval can wait
+// for hours while the user is away).
+const CODEX_THREAD_ACTIVITY_WINDOW_MS = 6 * 60 * 60_000;
+const CODEX_THREAD_ACTIVITY_MAX = 16;
+const CODEX_THREAD_LIST_LIMIT = 20;
+// A thread tail is read with this window first and grown (x4) up to the max until it
+// reaches the current turn's task_started or a turn-ending event.
 const CODEX_THREAD_TAIL_BYTES = 512 * 1024;
+const CODEX_THREAD_TAIL_MAX_BYTES = 8 * 1024 * 1024;
+const CODEX_THREAD_TAIL_GROWTH = 4;
+// Bounds on what the tail cache keeps per thread.
+const CODEX_CACHED_TURN_MAX_EVENTS = 1_000;
+const CODEX_CACHED_TURN_MAX_BYTES = 2 * 1024 * 1024;
+const CODEX_CACHED_STRING_MAX = 64 * 1024;
+const CODEX_CACHED_UNUSED_STRING_MAX = 1024;
+const CODEX_CACHED_MAX_DEPTH = 16;
+const CODEX_HEAD_MAX_BYTES = 1024 * 1024;
+// Fields that may hold a tool's input as JSON text; parseCodexEvent reads them.
+const CODEX_JSON_INPUT_KEYS = new Set(["arguments", "input", "arguments_json", "tool_input", "toolInput"]);
+// Large fields that activity and title inference never read.
+const CODEX_UNUSED_LARGE_KEYS = new Set(["output", "encrypted_content", "aggregated_output", "formatted_output", "stdout", "stderr", "image_url"]);
 const codexThreadTailCache = new Map();
+const codexRolloutMetadataCache = new Map();
+const codexCachedEntryBytes = new WeakMap();
 
 function parseCodexEvent(entry) {
   const payload = entry && entry.payload ? entry.payload : {};
@@ -407,6 +427,7 @@ function readCodexFileMetadata(filePath, sessionId, indexed) {
   return {
     title: parentTitle || deriveCodexTitleFromEvents(events),
     cwd: ownMeta.cwd || null,
+    source: ownMeta.source,
     internal: isInternalCodexSession(events),
   };
 }
@@ -468,10 +489,13 @@ function codexSessionIdFromFile(filePath) {
 function buildCodexFileSession(latestSessionFile, events, options = {}) {
   if (!latestSessionFile) return null;
 
-  const activity = inferCodexActivity(events);
+  // The turn-aware tail, when given, decides the activity: the last N lines alone can
+  // miss the start of a long turn and make a running thread look finished.
+  const activityEvents = options.activityEvents || events;
+  const activity = inferCodexActivity(activityEvents, Number.isFinite(options.now) ? options.now : Date.now());
   return {
     sessionId: codexSessionIdFromFile(latestSessionFile),
-    latestTitle: deriveLatestCodexTitleFromEvents(events),
+    latestTitle: deriveLatestCodexTitleFromEvents(events) || deriveLatestCodexTitleFromEvents(activityEvents),
     activity,
     usage: options.includeUsage === false ? null : summarizeCodexUsage(events),
     latestSessionFile,
@@ -527,46 +551,314 @@ function attachCodexSessionDetails(sessions, activeSession) {
 }
 
 // codex app-server lists every thread as "notLoaded" (the ChatGPT app runs its own
-// server), so each recently touched thread's progress is read from the tail of its
-// rollout file. Tails are cached by mtime + size so idle files are not re-read.
+// server), so each recently written thread's progress is read from the tail of its
+// rollout file. The most recently written rollouts are read first, so the cap never
+// skips a running thread for one that finished earlier; threads in the window past
+// the cap get an "unknown" activity rather than none (which would read as finished).
 function attachCodexThreadActivity(threads, options = {}) {
   const now = Number.isFinite(options.now) ? options.now : Date.now();
   const windowMs = Number.isFinite(options.windowMs) ? options.windowMs : CODEX_THREAD_ACTIVITY_WINDOW_MS;
   const maxThreads = Number.isFinite(options.maxThreads) ? options.maxThreads : CODEX_THREAD_ACTIVITY_MAX;
   const cache = options.cache || codexThreadTailCache;
-  const used = new Set();
+  const used = options.usedPaths || new Set();
 
-  const result = threads.map((thread) => {
-    if (!thread || !thread.path || thread.activity || used.size >= maxThreads) return thread;
+  const candidates = [];
+  threads.forEach((thread, index) => {
+    if (!thread || !thread.path || thread.activity) return;
     let stat;
     try {
       stat = fs.statSync(thread.path);
     } catch {
-      return thread;
+      return;
     }
-    if (now - stat.mtimeMs > windowMs) return thread;
+    if (now - stat.mtimeMs <= windowMs) candidates.push({ index, stat });
+  });
+  candidates.sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs || a.index - b.index);
+
+  const result = threads.slice();
+  candidates.forEach(({ index, stat }, rank) => {
+    const thread = threads[index];
+    if (rank >= maxThreads) {
+      result[index] = { ...thread, activity: uninspectedCodexActivity() };
+      return;
+    }
 
     used.add(thread.path);
-    const events = cachedCodexThreadTail(cache, thread.path, stat);
-    return {
+    const events = readCodexThreadTail(thread.path, { cache, stat });
+    result[index] = {
       ...thread,
       activity: inferCodexActivity(events, now),
       lastActivityAt: latestCodexEventTimestamp(events) || thread.lastActivityAt || null,
+      latestTitle: deriveLatestCodexTitleFromEvents(events) || thread.latestTitle || null,
     };
   });
 
-  for (const cachedPath of cache.keys()) {
-    if (!used.has(cachedPath)) cache.delete(cachedPath);
+  pruneCache(cache, used);
+  return result;
+}
+
+function idleCodexActivity(session) {
+  return {
+    state: "idle",
+    detail: "no recent Codex event",
+    lastEventAt: session && session.lastActivityAt || null,
+    staleMs: null,
+  };
+}
+
+function uninspectedCodexActivity() {
+  return {
+    state: "unknown",
+    detail: "not inspected",
+    lastEventAt: null,
+    staleMs: null,
+  };
+}
+
+// The cached tail of a rollout file, covering at least the thread's current turn: the
+// window grows until it reaches the turn's task_started or a turn-ending event, and a
+// turn longer than the largest window is treated as still open. Unchanged files (same
+// mtime + size) are not read again; bytes appended since the last read are read alone.
+function readCodexThreadTail(filePath, options = {}) {
+  const cache = options.cache || codexThreadTailCache;
+  let stat = options.stat;
+  if (!stat) {
+    try {
+      stat = fs.statSync(filePath);
+    } catch {
+      cache.delete(filePath);
+      return [];
+    }
+  }
+
+  const cached = cache.get(filePath);
+  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) return cached.events;
+
+  const entry = cached && canAppendCodexThreadTail(cached, stat)
+    ? appendCodexThreadTail(filePath, cached, stat)
+    : loadCodexThreadTail(filePath, stat);
+  cache.set(filePath, entry);
+  return entry.events;
+}
+
+// Rollouts are append-only, so a file that only grew is read from where the last read
+// stopped.
+function canAppendCodexThreadTail(cached, stat) {
+  return Number.isFinite(cached.offset)
+    && stat.size >= cached.size
+    && stat.mtimeMs >= cached.mtimeMs
+    && stat.size - cached.offset <= CODEX_THREAD_TAIL_MAX_BYTES;
+}
+
+function appendCodexThreadTail(filePath, cached, stat) {
+  const { entries, nextOffset } = readJsonlByteRange(filePath, cached.offset, stat.size);
+  return {
+    mtimeMs: stat.mtimeMs,
+    size: stat.size,
+    offset: Number.isFinite(nextOffset) ? nextOffset : cached.offset,
+    events: boundCodexTurnEvents(cached.events.concat(entries.map(compactCodexEntry))),
+  };
+}
+
+function loadCodexThreadTail(filePath, stat) {
+  let windowBytes = CODEX_THREAD_TAIL_BYTES;
+  for (;;) {
+    const start = Math.max(0, stat.size - windowBytes);
+    const { entries, nextOffset } = readJsonlByteRange(filePath, start, stat.size);
+    const truncated = start > 0;
+    const hasTurnBoundary = entries.some(isCodexTurnBoundaryEntry);
+    if (!truncated || hasTurnBoundary || windowBytes >= CODEX_THREAD_TAIL_MAX_BYTES) {
+      let events = entries.map(compactCodexEntry);
+      // No turn boundary in the largest window (or not even one complete line): the
+      // current turn started further back and has not ended.
+      if (truncated && !hasTurnBoundary) events = [syntheticCodexTurnStart(events, stat), ...events];
+      return {
+        mtimeMs: stat.mtimeMs,
+        size: stat.size,
+        offset: nextOffset,
+        events: boundCodexTurnEvents(events),
+      };
+    }
+    windowBytes *= CODEX_THREAD_TAIL_GROWTH;
+  }
+}
+
+function syntheticCodexTurnStart(events, stat) {
+  const firstTimestamp = events
+    .map((event) => event && event.timestamp)
+    .find((timestamp) => timestamp && Number.isFinite(Date.parse(timestamp)));
+  return {
+    timestamp: firstTimestamp || new Date(stat.mtimeMs).toISOString(),
+    type: "event_msg",
+    payload: { type: "task_started", synthetic: true },
+  };
+}
+
+function codexEntryPayloadType(entry) {
+  return entry && entry.payload && typeof entry.payload === "object" ? entry.payload.type || null : null;
+}
+
+function isCodexTurnBoundaryEntry(entry) {
+  const payloadType = codexEntryPayloadType(entry);
+  return payloadType === "task_started" || isTerminalPayload(payloadType);
+}
+
+// Keeps the latest turn (from its task_started). A turn over the event or byte budget
+// keeps its task_started, its latest user prompt (for the latest title) and as many
+// of its newest events as fit.
+function boundCodexTurnEvents(events) {
+  const startIndex = findLastIndex(events, (event) => codexEntryPayloadType(event) === "task_started");
+  const turn = startIndex > 0 ? events.slice(startIndex) : events;
+  const totalBytes = turn.reduce((sum, event) => sum + cachedEntryBytes(event), 0);
+  if (turn.length <= CODEX_CACHED_TURN_MAX_EVENTS && totalBytes <= CODEX_CACHED_TURN_MAX_BYTES) return turn;
+
+  const keepStart = codexEntryPayloadType(turn[0]) === "task_started";
+  const promptIndex = findLastIndex(turn, (event) => codexEntryPayloadType(event) === "user_message");
+  const pinned = keepStart ? [0] : [];
+  if (promptIndex > 0) pinned.push(promptIndex);
+
+  const firstTailCandidate = keepStart ? 1 : 0;
+  let budgetEvents = CODEX_CACHED_TURN_MAX_EVENTS - pinned.length;
+  let budgetBytes = CODEX_CACHED_TURN_MAX_BYTES - pinned.reduce((sum, index) => sum + cachedEntryBytes(turn[index]), 0);
+  let tailStart = turn.length;
+  while (tailStart > firstTailCandidate && budgetEvents > 0) {
+    const bytes = cachedEntryBytes(turn[tailStart - 1]);
+    if (tailStart < turn.length && bytes > budgetBytes) break;
+    tailStart -= 1;
+    budgetEvents -= 1;
+    budgetBytes -= bytes;
+  }
+
+  return [
+    ...pinned.filter((index) => index < tailStart).map((index) => turn[index]),
+    ...turn.slice(tailStart),
+  ];
+}
+
+function cachedEntryBytes(entry) {
+  return entry && typeof entry === "object" ? codexCachedEntryBytes.get(entry) || 64 : 64;
+}
+
+// Copies a rollout entry for the tail cache with its large strings cut down: tool
+// inputs that are JSON text become (compacted) objects so approval and action
+// detection still read them; fields nothing reads (tool output, encrypted reasoning,
+// images) keep only a short prefix; any other string keeps its first 64 KB.
+function compactCodexEntry(entry) {
+  const counter = { bytes: 0 };
+  const compact = compactCodexValue(entry, null, CODEX_CACHED_STRING_MAX, 0, counter);
+  if (compact && typeof compact === "object") codexCachedEntryBytes.set(compact, counter.bytes);
+  return compact;
+}
+
+function compactCodexValue(value, key, maxString, depth, counter) {
+  const limit = CODEX_UNUSED_LARGE_KEYS.has(key) ? CODEX_CACHED_UNUSED_STRING_MAX : maxString;
+  if (typeof value === "string") {
+    if (value.length > limit && CODEX_JSON_INPUT_KEYS.has(key)) {
+      const parsed = parseJsonObject(value);
+      if (parsed) return compactCodexValue(parsed, null, limit, depth + 1, counter);
+    }
+    const kept = value.length > limit ? value.slice(0, limit) : value;
+    counter.bytes += kept.length * 2 + 16;
+    return kept;
+  }
+
+  counter.bytes += 16;
+  if (!value || typeof value !== "object") return value;
+  if (depth >= CODEX_CACHED_MAX_DEPTH) return null;
+  if (Array.isArray(value)) return value.map((item) => compactCodexValue(item, key, limit, depth + 1, counter));
+
+  const result = {};
+  for (const [childKey, child] of Object.entries(value)) {
+    counter.bytes += childKey.length * 2;
+    result[childKey] = compactCodexValue(child, childKey, limit, depth + 1, counter);
   }
   return result;
 }
 
-function cachedCodexThreadTail(cache, filePath, stat) {
+function parseJsonObject(text) {
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function pruneCache(cache, usedPaths) {
+  for (const cachedPath of cache.keys()) {
+    if (!usedPaths.has(cachedPath)) cache.delete(cachedPath);
+  }
+}
+
+// thread/list returns at most CODEX_THREAD_LIST_LIMIT threads (and app-servers that do
+// not support sorting by update time return the newest-created ones), so interactive
+// rollouts written within the activity window that it left out are added from disk:
+// the rollout being written right now is always a listed session.
+function mergeRecentCodexRollouts(threads, files, codexHome, options = {}) {
+  const now = Number.isFinite(options.now) ? options.now : Date.now();
+  const windowMs = Number.isFinite(options.windowMs) ? options.windowMs : CODEX_THREAD_ACTIVITY_WINDOW_MS;
+  const maxMerged = Number.isFinite(options.maxMerged) ? options.maxMerged : CODEX_THREAD_ACTIVITY_MAX;
+  const cache = options.metadataCache || codexRolloutMetadataCache;
+  const known = new Set(threads.map((thread) => thread && thread.id).filter(Boolean));
+  const used = new Set();
+  const merged = [];
+  let indexed = null;
+
+  for (const filePath of files || []) {
+    if (merged.length >= maxMerged) break;
+    const mtimeMs = safeMtimeMs(filePath);
+    if (!mtimeMs) continue;
+    // Files are sorted newest first.
+    if (now - mtimeMs > windowMs) break;
+    const id = codexSessionIdFromFile(filePath);
+    if (!id || known.has(id)) continue;
+    known.add(id);
+
+    if (!indexed) indexed = new Map(readCodexSessionIndex(codexHome, 400).map((session) => [session.id, session]));
+    used.add(filePath);
+    const metadata = cachedCodexRolloutMetadata(cache, filePath, id, indexed, mtimeMs);
+    if (metadata.internal || !isInteractiveCodexSource(metadata.source)) continue;
+
+    merged.push({
+      id,
+      title: (indexed.get(id) || {}).title || metadata.title || null,
+      cwd: metadata.cwd || null,
+      path: filePath,
+      status: null,
+      updatedAt: new Date(mtimeMs).toISOString(),
+      source: "codex_session_file",
+    });
+  }
+
+  pruneCache(cache, used);
+  return threads
+    .concat(merged)
+    .map((thread, index) => ({ thread, index, updatedMs: codexThreadUpdatedMs(thread) }))
+    .sort((a, b) => b.updatedMs - a.updatedMs || a.index - b.index)
+    .map((item) => item.thread);
+}
+
+function cachedCodexRolloutMetadata(cache, filePath, id, indexed, mtimeMs) {
   const cached = cache.get(filePath);
-  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) return cached.events;
-  const events = readJsonlTailBytes(filePath, { maxBytes: CODEX_THREAD_TAIL_BYTES, maxLines: CODEX_SESSION_TAIL_LINES });
-  cache.set(filePath, { mtimeMs: stat.mtimeMs, size: stat.size, events });
-  return events;
+  if (cached && (cached.metadata.title || cached.mtimeMs === mtimeMs)) return cached.metadata;
+  const metadata = readCodexFileMetadata(filePath, id, indexed);
+  cache.set(filePath, { mtimeMs, metadata });
+  return metadata;
+}
+
+// The sources thread/list returns by default; others (codex exec, sub-agents, ...)
+// are not sessions the user drives.
+function isInteractiveCodexSource(source) {
+  return source === undefined || source === null || source === "cli" || source === "vscode";
+}
+
+function codexThreadUpdatedMs(thread) {
+  const value = thread && (thread.updatedAt || thread.lastActivityAt);
+  if (value === null || value === undefined || value === "") return 0;
+  const numeric = Number(value);
+  if (Number.isFinite(numeric)) return numeric < 10_000_000_000 ? numeric * 1000 : numeric;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function isArchivedSession(session) {
@@ -602,22 +894,48 @@ async function collectCodexAppServer({ codexHome, timeoutMs = 3_500, includeQuot
       errors: [],
     };
 
-    const send = (method, params) => {
-      child.stdin.write(`${JSON.stringify({ id: id++, method, params })}\n`);
+    const pending = new Map();
+    const send = (method, params, onResponse) => {
+      const requestId = id++;
+      pending.set(requestId, onResponse);
+      child.stdin.write(`${JSON.stringify({ id: requestId, method, params })}\n`);
     };
     const notify = (method, params) => {
       child.stdin.write(`${JSON.stringify({ method, params })}\n`);
     };
 
+    let finished = false;
     const finish = () => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
       if (stderr) result.errors.push(stderr.slice(0, 300));
       child.kill();
       resolve(result);
     };
 
     const timer = setTimeout(finish, timeoutMs);
+    let threadsDone = false;
+    let quotaDone = !includeQuota;
+    const finishWhenDone = () => {
+      if (threadsDone && quotaDone) finish();
+    };
+
+    // Most recently updated threads first, so a thread resumed long after it was
+    // created is listed; app-servers that do not know sortKey get the plain request.
+    const listThreads = (params, fallbackParams) => send("thread/list", params, (message) => {
+      if (message.error && fallbackParams) {
+        listThreads(fallbackParams, null);
+        return;
+      }
+      if (message.error) result.errors.push(message.error.message);
+      result.threads = (message.result && message.result.data || []).map(normalizeCodexThread);
+      threadsDone = true;
+      finishWhenDone();
+    });
 
     child.on("error", (error) => {
+      finished = true;
       result.errors.push(error.message);
       clearTimeout(timer);
       resolve(result);
@@ -642,34 +960,33 @@ async function collectCodexAppServer({ codexHome, timeoutMs = 3_500, includeQuot
           continue;
         }
 
-        if (message.id === 1) {
-          if (message.error) result.errors.push(message.error.message);
-          result.available = !message.error;
-          notify("initialized", {});
-          send("thread/list", { limit: 20, archived: false });
-          if (includeQuota) send("account/rateLimits/read", {});
-        } else if (message.id === 2) {
-          if (message.error) result.errors.push(message.error.message);
-          result.threads = (message.result && message.result.data || []).map(normalizeCodexThread);
-          if (!includeQuota) {
-            clearTimeout(timer);
-            finish();
-          }
-        } else if (message.id === 3) {
-          if (message.error) {
-            result.errors.push(message.error.message);
-          } else {
-            result.quota = normalizeCodexQuota(message.result);
-          }
-          clearTimeout(timer);
-          finish();
-        }
+        const onResponse = message.id !== undefined ? pending.get(message.id) : null;
+        if (!onResponse) continue;
+        pending.delete(message.id);
+        onResponse(message);
       }
     });
 
     send("initialize", {
       clientInfo: { name: "flexbar-ai-dashboard", version: "1.0.0" },
       capabilities: { experimentalApi: true },
+    }, (message) => {
+      if (message.error) result.errors.push(message.error.message);
+      result.available = !message.error;
+      notify("initialized", {});
+      const plainList = { limit: CODEX_THREAD_LIST_LIMIT, archived: false };
+      listThreads({ ...plainList, sortKey: "updated_at" }, plainList);
+      if (includeQuota) {
+        send("account/rateLimits/read", {}, (quotaMessage) => {
+          if (quotaMessage.error) {
+            result.errors.push(quotaMessage.error.message);
+          } else {
+            result.quota = normalizeCodexQuota(quotaMessage.result);
+          }
+          quotaDone = true;
+          finishWhenDone();
+        });
+      }
     });
   });
 }
@@ -837,14 +1154,12 @@ function labelFromQuotaPath(pathParts) {
 }
 
 async function collectCodexSnapshot(options = {}) {
+  const now = Number.isFinite(options.now) ? options.now : Date.now();
   const includeUsage = options.includeUsage !== false;
   const includeQuota = options.includeQuota !== false;
   const codexHome = options.codexHome || resolveCodexHome(options.env);
   const sessionRoot = path.join(codexHome, "sessions");
-  const files = walkJsonlFiles(sessionRoot);
-  const latestSessionFile = latestFile(files);
-  const latestEvents = latestSessionFile ? readJsonlTail(latestSessionFile, options.maxLines || CODEX_SESSION_TAIL_LINES) : [];
-  const latestFileSession = buildCodexFileSession(latestSessionFile, latestEvents, { includeUsage });
+  const tailCache = options.threadTailCache || codexThreadTailCache;
   const appServer = options.skipAppServer ? null : await collectCodexAppServer({
     codexHome,
     timeoutMs: options.appServerTimeoutMs || 3_500,
@@ -857,9 +1172,19 @@ async function collectCodexSnapshot(options = {}) {
     codexHome,
     timeoutMs: options.oauthTimeoutMs || 6_000,
   });
+
+  // Rollout files are read after the (slow) app-server call so they are as fresh as
+  // the thread list.
+  const files = walkJsonlFiles(sessionRoot);
+  const latestSessionFile = latestFile(files);
+  const latestEvents = latestSessionFile ? readJsonlTail(latestSessionFile, options.maxLines || CODEX_SESSION_TAIL_LINES) : [];
+  const usedTails = new Set(latestSessionFile ? [latestSessionFile] : []);
   const rawSessions = appServer && appServer.threads.length > 0
-    ? attachCodexThreadActivity(appServer.threads, { now: options.now })
+    ? attachCodexThreadActivity(mergeRecentCodexRollouts(appServer.threads, files, codexHome, { now }), { now, cache: tailCache, usedPaths: usedTails })
     : readCodexSessionsFromFiles(files, codexHome, { includeUsage });
+  const latestTurnEvents = latestSessionFile ? readCodexThreadTail(latestSessionFile, { cache: tailCache }) : [];
+  pruneCache(tailCache, usedTails);
+  const latestFileSession = buildCodexFileSession(latestSessionFile, latestEvents, { includeUsage, activityEvents: latestTurnEvents, now });
   const activeSession = chooseActiveCodexSession(rawSessions, latestFileSession);
   const sessions = attachCodexSessionDetails(rawSessions, activeSession);
 
@@ -880,7 +1205,12 @@ async function collectCodexSnapshot(options = {}) {
     },
     sessions,
     activeSession,
-    activity: activeSession && activeSession.activity || inferCodexActivity(latestEvents),
+    // The newest rollout's activity belongs to its own session only: when that session
+    // is not listed (an internal approval review, say), the fallback active session
+    // keeps its own activity.
+    activity: activeSession
+      ? activeSession.activity || idleCodexActivity(activeSession)
+      : inferCodexActivity(latestTurnEvents, now),
     usage: includeUsage ? activeSession && activeSession.usage || summarizeCodexUsage(latestEvents) : null,
     quota: appServerQuota || oauthQuota && oauthQuota.quota || null,
     fileStats: {
@@ -898,21 +1228,16 @@ function numberOrNull(value) {
   return Number.isFinite(Number(value)) ? Number(value) : null;
 }
 
+// The first maxLines entries, read from at most the first MB of the file (rollouts
+// can grow to many MB; their metadata and first prompt are at the start).
 function readJsonlHead(filePath, maxLines = 80) {
-  let content;
+  let size;
   try {
-    content = fs.readFileSync(filePath, "utf8");
+    size = fs.statSync(filePath).size;
   } catch {
     return [];
   }
-
-  return content.split(/\r?\n/).filter(Boolean).slice(0, maxLines).map((line) => {
-    try {
-      return JSON.parse(line);
-    } catch {
-      return null;
-    }
-  }).filter(Boolean);
+  return readJsonlByteRange(filePath, 0, Math.min(size, CODEX_HEAD_MAX_BYTES)).entries.slice(0, maxLines);
 }
 
 function extractPayloadText(payload) {
@@ -943,9 +1268,11 @@ module.exports = {
   chooseActiveCodexSession,
   inferCodexActivity,
   loadCodexOAuthCredentials,
+  mergeRecentCodexRollouts,
   normalizeCodexQuota,
   parseCodexEvent,
   readCodexSessionIndex,
   readCodexSessionsFromFiles,
+  readCodexThreadTail,
   summarizeCodexUsage,
 };

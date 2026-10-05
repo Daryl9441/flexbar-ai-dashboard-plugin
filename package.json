@@ -1,19 +1,23 @@
 {
   "scripts": {
     "build": "rollup -c",
+    "doctor": "node scripts/doctor.cjs",
     "prototype": "node src/prototype/print-snapshot.js",
     "prototype:once": "node src/prototype/print-snapshot.js --once",
     "prototype:json": "node src/prototype/print-snapshot.js --once --json",
     "test": "node --test test/*.test.js",
+    "predev": "npm run build && npm run doctor",
     "dev": "npm-run-all plugin:unlink plugin:link -p plugin:watch plugin:debug",
     "plugin:watch": "rollup -c -w --watch.onEnd=\"npm run plugin:restart\"",
-    "plugin:unlink": "flexcli plugin unlink --uuid com.aspen.flexbar-ai-dashboard --silent",
-    "plugin:link": "flexcli plugin link --path com.aspen.flexbar-ai-dashboard.plugin --uuid com.aspen.flexbar-ai-dashboard --start false",
-    "plugin:restart": "flexcli plugin restart --uuid=com.aspen.flexbar-ai-dashboard",
-    "plugin:debug": "flexcli plugin debug --uuid=com.aspen.flexbar-ai-dashboard",
-    "plugin:validate": "flexcli plugin validate --path com.aspen.flexbar-ai-dashboard.plugin",
-    "plugin:pack": "flexcli plugin pack --path com.aspen.flexbar-ai-dashboard.plugin",
-    "plugin:install": "flexcli plugin install --path ./com.aspen.flexbar-ai-dashboard.flexplugin --force"
+    "plugin:unlink": "node scripts/flexcli.cjs plugin unlink --uuid com.aspen.flexbar-ai-dashboard --silent",
+    "plugin:link": "node scripts/flexcli.cjs plugin link --path com.aspen.flexbar-ai-dashboard.plugin --uuid com.aspen.flexbar-ai-dashboard --start false",
+    "plugin:restart": "node scripts/flexcli.cjs plugin restart --uuid=com.aspen.flexbar-ai-dashboard",
+    "plugin:debug": "node scripts/flexcli.cjs plugin debug --uuid=com.aspen.flexbar-ai-dashboard",
+    "plugin:validate": "node scripts/flexcli.cjs plugin validate --path com.aspen.flexbar-ai-dashboard.plugin",
+    "preplugin:pack": "npm run build && npm run doctor",
+    "plugin:pack": "node scripts/flexcli.cjs plugin pack --path com.aspen.flexbar-ai-dashboard.plugin",
+    "preplugin:install": "npm run plugin:pack",
+    "plugin:install": "node scripts/flexcli.cjs plugin install --path ./com.aspen.flexbar-ai-dashboard.flexplugin --force"
   },
   "engines": {
     "node": ">=18"

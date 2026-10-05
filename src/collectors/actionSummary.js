@@ -47,7 +47,8 @@ function summarizeReasoning(entry) {
   ];
 
   for (const candidate of candidates) {
-    const text = stringifyReasoningCandidate(candidate);
+    // Codex reasoning summaries start with a "**Heading**" line; show it without markers.
+    const text = stringifyReasoningCandidate(candidate).replace(/\*\*([^*]+)\*\*/g, "$1").trim();
     if (text) return truncate(redactSecrets(text));
   }
 

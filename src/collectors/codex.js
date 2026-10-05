@@ -9,6 +9,9 @@ const { resolveCodexHome } = require("./paths");
 
 const CODEX_ACTIVITY_STALE_MS = 30_000;
 const CODEX_OPEN_TURN_STALE_MS = 30 * 60_000;
+// A call still open after this long belongs to a session that was killed or abandoned;
+// approvals legitimately wait for the user longer than running tools do.
+const CODEX_APPROVAL_STALE_MS = 6 * 60 * 60_000;
 const CODEX_SESSION_TAIL_LINES = 500;
 const RECENT_TOKEN_EVENTS_LIMIT = 10;
 // Rollouts written within this window get per-thread activity (an approval can wait
@@ -179,6 +182,15 @@ function inferCodexActivity(events, now = Date.now()) {
   }
 
   const openCall = findOpenFunctionCall(parsed);
+  const openCallStaleMs = openCall && openCall.approvalRequest ? CODEX_APPROVAL_STALE_MS : CODEX_OPEN_TURN_STALE_MS;
+  if (openCall && staleMs !== null && staleMs > openCallStaleMs) {
+    return {
+      state: "idle",
+      detail: "no recent Codex event",
+      lastEventAt: latest.timestamp,
+      staleMs,
+    };
+  }
   if (openCall) {
     if (openCall.approvalRequest) {
       return {
@@ -575,15 +587,24 @@ function attachCodexThreadActivity(threads, options = {}) {
   });
   candidates.sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs || a.index - b.index);
 
+  // The cap limits reads, not threads: an unchanged rollout is served from the cache,
+  // so a thread that has been waiting (e.g. for approval) without writing anything is
+  // still inspected however many newer rollouts there are.
   const result = threads.slice();
-  candidates.forEach(({ index, stat }, rank) => {
+  let freshReads = 0;
+  candidates.forEach(({ index, stat }) => {
     const thread = threads[index];
-    if (rank >= maxThreads) {
-      result[index] = { ...thread, activity: uninspectedCodexActivity() };
-      return;
+    used.add(thread.path);
+    const cached = cache.get(thread.path);
+    const upToDate = cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size;
+    if (!upToDate) {
+      if (freshReads >= maxThreads) {
+        result[index] = { ...thread, activity: uninspectedCodexActivity() };
+        return;
+      }
+      freshReads += 1;
     }
 
-    used.add(thread.path);
     const events = readCodexThreadTail(thread.path, { cache, stat });
     result[index] = {
       ...thread,
@@ -757,7 +778,8 @@ function compactCodexValue(value, key, maxString, depth, counter) {
       const parsed = parseJsonObject(value);
       if (parsed) return compactCodexValue(parsed, null, limit, depth + 1, counter);
     }
-    const kept = value.length > limit ? value.slice(0, limit) : value;
+    // A plain slice is a V8 sliced string that keeps the whole original alive.
+    const kept = value.length > limit ? Buffer.from(value.slice(0, limit), "utf8").toString("utf8") : value;
     counter.bytes += kept.length * 2 + 16;
     return kept;
   }

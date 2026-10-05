@@ -478,3 +478,49 @@ test("the newest rollout's activity never lands on another session", { skip: pro
   assert.notEqual(snapshot.activeSession.activity && snapshot.activeSession.activity.state, "approval");
   assert.equal(snapshot.activity.state, "idle", "the provider activity is the active session's own");
 });
+
+test("Codex open calls age out: tools after 30 min, approvals after 6 h", () => {
+  const now = Date.parse("2026-05-13T12:00:00.000Z");
+  const at = (msBefore) => new Date(now - msBefore).toISOString();
+  const turn = (msBefore, args) => [
+    { timestamp: at(msBefore + 1_000), type: "event_msg", payload: { type: "task_started" } },
+    { timestamp: at(msBefore), type: "response_item", payload: { type: "function_call", name: "shell_command", arguments: JSON.stringify(args), call_id: "c1" } },
+  ];
+  const tool = { command: "npm run build" };
+  const escalated = { command: "rm -rf dist", sandbox_permissions: "require_escalated" };
+
+  assert.equal(inferCodexActivity(turn(29 * 60_000, tool), now).state, "tool");
+  assert.equal(inferCodexActivity(turn(31 * 60_000, tool), now).state, "idle");
+  assert.equal(inferCodexActivity(turn(5 * 3_600_000, escalated), now).state, "approval");
+  assert.equal(inferCodexActivity(turn(7 * 3_600_000, escalated), now).state, "idle");
+});
+
+test("the thread read cap limits fresh reads only: unchanged cached rollouts stay inspected", (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "flexbar-codex-cap-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const now = Date.now();
+  const at = (msBefore) => new Date(now - msBefore).toISOString();
+  const write = (name, events, msBefore) => {
+    const file = path.join(dir, `${name}.jsonl`);
+    fs.writeFileSync(file, events.map((event) => JSON.stringify(event)).join("\n") + "\n");
+    fs.utimesSync(file, new Date(now - msBefore), new Date(now - msBefore));
+    return { id: name, title: name, path: file };
+  };
+  const approval = write("approval", [
+    { timestamp: at(3 * 3_600_000 + 1_000), type: "event_msg", payload: { type: "task_started" } },
+    { timestamp: at(3 * 3_600_000), type: "response_item", payload: { type: "function_call", name: "shell_command", arguments: JSON.stringify({ command: "deploy", sandbox_permissions: "require_escalated" }), call_id: "a" } },
+  ], 3 * 3_600_000);
+  const newer = Array.from({ length: 3 }, (_, index) => write(`done${index}`, [
+    { timestamp: at(60_000 + index), type: "event_msg", payload: { type: "task_complete" } },
+  ], 60_000 + index));
+
+  const cache = new Map();
+  const threads = [...newer, approval];
+  const first = attachCodexThreadActivity(threads, { now, cache, maxThreads: 3 });
+  assert.equal(first[3].activity.state, "unknown", "first refresh: past the read cap");
+  const second = attachCodexThreadActivity(threads, { now, cache, maxThreads: 3 });
+  assert.equal(second[3].activity.state, "approval", "next refresh reads it; the other three come from the cache");
+  const third = attachCodexThreadActivity(threads, { now, cache, maxThreads: 3 });
+  assert.equal(third[3].activity.state, "approval", "and it stays inspected while unchanged");
+  assert.ok(cache.has(approval.path));
+});

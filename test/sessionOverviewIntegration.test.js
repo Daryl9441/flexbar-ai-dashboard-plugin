@@ -75,7 +75,8 @@ test("Codex rollouts read by the collector are listed by the overview policy", (
         call(3 * HOUR, "a1", { command: "rm -rf build", sandbox_permissions: "require_escalated" }),
       ], 3 * HOUR),
     },
-    // Killed mid tool call 2 hours ago: the collector still reports the open call.
+    // Killed mid tool call 2 hours ago: the open call ages out in the collector, so the
+    // single-session key and the overview agree that it is not running.
     { id: "abandoned", title: "Abandoned", path: write("abandoned", [event(2 * HOUR + MINUTE, "task_started"), call(2 * HOUR, "b1")], 2 * HOUR) },
     { id: "done", title: "Finished", path: write("done", [event(6 * MINUTE, "task_started"), event(5 * MINUTE, "task_complete")], 5 * MINUTE) },
   ];
@@ -84,7 +85,7 @@ test("Codex rollouts read by the collector are listed by the overview policy", (
   const byId = Object.fromEntries(sessions.map((session) => [session.id, session]));
   assert.notEqual(byId.long.activity.state, "idle", "the turn's task_started is beyond the first window");
   assert.equal(byId.away.activity.state, "approval");
-  assert.equal(byId.abandoned.activity.state, "tool", "the collector does not hide sessions");
+  assert.equal(byId.abandoned.activity.state, "idle", "an open call older than 30 min is not running");
 
   const state = createDashboardState();
   assert.deepEqual(statuses(buildSessionOverview(codexSnapshot(sessions), state, { now })), [

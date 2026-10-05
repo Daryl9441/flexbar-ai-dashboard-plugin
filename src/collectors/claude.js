@@ -5,7 +5,6 @@ const path = require("node:path");
 const { summarizeToolAction } = require("./actionSummary");
 const {
   pathExists,
-  readJsonlFiles,
   readJsonlTail,
   safeMtimeMs,
   walkJsonlFiles,
@@ -14,6 +13,34 @@ const {
   resolveClaudeBridgePath,
   resolveClaudeProjectRoots,
 } = require("./paths");
+
+// Parsed transcript tails by path, reused while a file's mtime and size are unchanged:
+// the collector runs every 2s and most transcripts it reads are idle.
+const claudeTranscriptCache = new Map();
+
+function readClaudeTranscripts(files, maxLines, cache = claudeTranscriptCache) {
+  const used = new Set();
+  const result = [];
+  for (const filePath of files) {
+    let stat;
+    try {
+      stat = fs.statSync(filePath);
+    } catch {
+      continue;
+    }
+    used.add(filePath);
+    let cached = cache.get(filePath);
+    if (!cached || cached.mtimeMs !== stat.mtimeMs || cached.size !== stat.size || cached.maxLines !== maxLines) {
+      cached = { mtimeMs: stat.mtimeMs, size: stat.size, maxLines, entries: readJsonlTail(filePath, maxLines) };
+      cache.set(filePath, cached);
+    }
+    for (const entry of cached.entries) result.push({ filePath, entry });
+  }
+  for (const cachedPath of cache.keys()) {
+    if (!used.has(cachedPath)) cache.delete(cachedPath);
+  }
+  return result;
+}
 
 // Transcript without an open tool call: idle once nothing was written for 30s.
 const CLAUDE_ACTIVITY_STALE_MS = 30_000;
@@ -823,7 +850,7 @@ async function collectClaudeSnapshot(options = {}) {
     })
     .slice(0, maxFiles);
   const selectedFiles = [...usageFiles, ...crowdedOut];
-  const fileEntries = readJsonlFiles(selectedFiles, options.maxLinesPerFile || 200);
+  const fileEntries = readClaudeTranscripts(selectedFiles, options.maxLinesPerFile || 200, options.tailCache);
   const latestSessionFile = sessionFiles[0] || null;
   const bridgePath = options.bridgePath || resolveClaudeBridgePath(options.env);
   const bridge = readClaudeBridgeSnapshot(bridgePath, { now });

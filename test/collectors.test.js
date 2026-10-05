@@ -917,3 +917,9 @@ test("Claude notification hooks report permission prompts as approval requests",
   assert.equal(activity.action, "npm install");
   assert.equal(activity.confidence, "high");
 });
+
+test("Codex reasoning summaries drop markdown bold markers", () => {
+  const { summarizeReasoning } = require("../src/collectors/actionSummary");
+  assert.equal(summarizeReasoning({ payload: { summary: [{ text: "**Updating tests**" }] } }), "Updating tests");
+  assert.equal(summarizeReasoning({ payload: { text: "Plain text" } }), "Plain text");
+});

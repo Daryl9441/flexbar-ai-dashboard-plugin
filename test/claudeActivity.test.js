@@ -459,3 +459,34 @@ test("Claude subagent transcripts are not sessions and do not supply titles or o
   assert.equal(session.project, PROJECT);
   assert.equal(session.activity.state, "idle");
 });
+
+test("Claude transcripts are re-read only when their mtime or size changes", (t) => {
+  const { collectClaudeSnapshot } = require("../src/collectors/claude");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "flexbar-claude-cache-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const project = path.join(root, "-Users-me-example");
+  fs.mkdirSync(project, { recursive: true });
+  const file = path.join(project, "11111111-1111-4111-8111-111111111111.jsonl");
+  const line = (text, iso) => JSON.stringify({
+    type: "user",
+    sessionId: "11111111-1111-4111-8111-111111111111",
+    timestamp: iso,
+    cwd: "/Users/me/example",
+    message: { role: "user", content: text },
+  });
+  fs.writeFileSync(file, line("First prompt", new Date().toISOString()) + "\n");
+
+  const tailCache = new Map();
+  const options = { projectRoots: [root], bridgePath: path.join(root, "none.jsonl"), includeQuota: false, tailCache };
+  return (async () => {
+    await collectClaudeSnapshot(options);
+    const first = tailCache.get(file);
+    assert.ok(first, "the transcript is cached");
+    await collectClaudeSnapshot(options);
+    assert.equal(tailCache.get(file), first, "unchanged: served from the cache");
+    fs.appendFileSync(file, line("Second prompt", new Date().toISOString()) + "\n");
+    await collectClaudeSnapshot(options);
+    assert.notEqual(tailCache.get(file), first, "appended: read again");
+    assert.equal(tailCache.get(file).entries.length, 2);
+  })();
+});

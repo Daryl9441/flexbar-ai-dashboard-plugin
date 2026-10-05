@@ -108,10 +108,10 @@ npm run plugin:install  # build -> doctor -> flexcli plugin pack -> flexcli plug
 `npm run doctor` runs automatically before `plugin:pack`, `plugin:install` and `dev` (they chain `npm run build && npm run doctor` explicitly, so it also runs with pnpm, yarn or `--ignore-scripts`). It checks:
 
 - Node.js >= 20.10 and `manifest.json` (uuid vs. folder name), the built backend, and a stray `config.json`;
-- for every target in `FLEX_TARGET` (same syntax as the build, see [Build and Deploy](#build-and-deploy)), that `@napi-rs/canvas-<target>` is bundled with the same version as `@napi-rs/canvas`;
+- for every target in `FLEX_TARGET` (same syntax as the build, see [Build and Deploy](#build-and-deploy)), that `@napi-rs/canvas-<target>` is bundled with the same version as `@napi-rs/canvas`, built for that OS/CPU, with its binary and every file its `package.json` lists (e.g. `icudtl.dat` for Windows);
 - that canvas loads from the plugin folder alone and renders a PNG in the runtime that will execute the plugin: on macOS FlexDesigner's own plugin runtime (`FlexDesigner Helper` with `ELECTRON_RUN_AS_NODE=1`), falling back to this Node.js with a warning when FlexDesigner is not installed; set `FLEX_NODE_RUNTIME=<binary>` to choose another. Only the binary matching that runtime is loaded; binaries for other platforms are checked, never loaded.
 
-自检会检查 Node.js 版本、manifest、构建产物，以及 `FLEX_TARGET` 中每个目标平台的 canvas 原生包是否存在且版本一致，并在实际运行插件的运行时（macOS 上为 FlexDesigner 自带的运行时）中加载 canvas。其他平台的二进制只检查、不加载。
+自检会检查 Node.js 版本、manifest、构建产物，以及 `FLEX_TARGET` 中每个目标平台的 canvas 原生包是否存在、版本一致且文件完整，并在实际运行插件的运行时（macOS 上为 FlexDesigner 自带的运行时）中加载 canvas。其他平台的二进制只检查、不加载。
 
 ```bash
 FLEX_TARGET=all npm run doctor   # check a build made with FLEX_TARGET=all
@@ -203,7 +203,9 @@ $env:FLEX_TARGET='all'; npm run build         # Windows PowerShell
 Remove-Item Env:FLEX_TARGET                   # back to the default
 ```
 
-Binaries missing from `node_modules` are fetched with `npm pack` at the exact installed `@napi-rs/canvas` version (cached in the system temp directory; `package.json` and the lockfile are untouched). The build fails if a requested binary cannot be bundled. Pass the same `FLEX_TARGET` to `npm run doctor`, `plugin:pack` and `plugin:install`; they rebuild with it.
+Binaries missing from `node_modules` are fetched with `npm pack` at the exact installed `@napi-rs/canvas` version; `package.json` and the lockfile are untouched. A fetched tarball must match the integrity `package-lock.json` records for it, and only such tarballs are cached, in `node_modules/.cache/flexbar-native-canvas` (re-checked on every use). The build fails if a requested binary cannot be bundled or a package is missing a file its `package.json` lists. Pass the same `FLEX_TARGET` to `npm run doctor`, `plugin:pack` and `plugin:install`; they rebuild with it.
+
+Rebuilds leave unchanged binaries untouched. On Windows, FlexDesigner keeps the loaded `.node` file locked while the plugin runs; if a build has to replace it, the build stops with a message to stop the plugin (or quit FlexDesigner) and build again, and the bundled package stays intact.
 
 Pack the `.flexplugin` artifact (builds and runs the doctor first; writes `com.aspen.flexbar-ai-dashboard.flexplugin` next to the plugin folder):
 
@@ -231,7 +233,7 @@ Artifacts:
 - Backend entry: `com.aspen.flexbar-ai-dashboard.plugin/backend/plugin.cjs`
 - Packed file: `com.aspen.flexbar-ai-dashboard.flexplugin`
 
-Releases: pushing a `v*` tag runs `.github/workflows/release.yml`, which calls `npm run release:pack` (`scripts/pack-release.cjs`: one `npm run plugin:pack` per asset with the matching `FLEX_TARGET`) and uploads `dist/*.flexplugin`, the assets listed under [From a release](#from-a-release). FlexDesigner looks for `<uuid>.<os>.<arch>.flexplugin` and may pick either darwin asset on any Mac, so both carry the arm64 and x64 binaries.
+Releases: pushing a `v*` tag runs `.github/workflows/release.yml`, which calls `npm run release:pack` (`scripts/pack-release.cjs`: one `npm run plugin:pack` per asset with the matching `FLEX_TARGET`), checks the assets with `node scripts/pack-release.cjs --verify dist` (each must bundle exactly its native canvas packages with all their files, and no `config.json`), and uploads the assets listed under [From a release](#from-a-release): the generic `com.aspen.flexbar-ai-dashboard.flexplugin` first, for FlexDesigner versions that take the first asset, then the platform ones. FlexDesigner looks for `<uuid>.<os>.<arch>.flexplugin` and may pick either darwin asset on any Mac, so both carry the arm64 and x64 binaries.
 
 ## Project Structure
 

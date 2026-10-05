@@ -287,7 +287,10 @@ function checkCanvasPackage(pluginDir) {
   };
 }
 
-/** Returns null when <dir> holds <name>@<version> built for <target> with a non-empty binary, else the problem. */
+/**
+ * Returns null when <dir> holds <name>@<version> built for <target> with a non-empty binary and every file its
+ * package.json lists, else the problem.
+ */
 function nativePackageProblem(dir, name, version, target) {
   const packageJson = readPackageJson(dir);
   if (!packageJson) return { en: "missing", zh: "缺失" };
@@ -308,6 +311,15 @@ function nativePackageProblem(dir, name, version, target) {
   const binary = main.endsWith(".node") ? path.join(dir, main) : null;
   if (!binary || !fs.existsSync(binary) || fs.statSync(binary).size === 0) {
     return { en: `native binary ${main || "(no main)"} is missing or empty`, zh: `原生二进制 ${main || "（无 main）"} 不存在或为空` };
+  }
+  // Same rule as the build (assertNativePackage): every file package.json lists must be there, e.g. icudtl.dat,
+  // which the Windows binary needs next to it.
+  const missing = nativeCanvas.missingPackageFiles(dir, packageJson);
+  if (missing.length > 0) {
+    return {
+      en: `is incomplete, missing ${missing.join(", ")} (listed in its package.json "files")`,
+      zh: `不完整，缺少 ${missing.join(", ")}（其 package.json 的 "files" 中列出）`,
+    };
   }
   return null;
 }

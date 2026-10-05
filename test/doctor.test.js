@@ -287,6 +287,41 @@ test("runDoctor checks name, version, os/cpu and binary of every requested targe
   assert.match(byId(emptyBinary, "canvas-native").en, /native binary skia\.darwin-arm64\.node is missing or empty/);
 });
 
+test("runDoctor requires every file a native package lists, like the build (icudtl.dat for Windows)", (t) => {
+  const windows = nativePackage("win32-x64", { files: ["skia.win32-x64-msvc.node", "icudtl.dat"] });
+  const pluginDir = makePluginDir(t, { targets: ["darwin-arm64"], packages: [windows] });
+  const windowsDir = path.join(pluginDir, "backend", "node_modules", "@napi-rs", "canvas-win32-x64-msvc");
+  const doctor = () => runDoctor({
+    pluginDir,
+    env: { FLEX_TARGET: "darwin-arm64,win32-x64" },
+    ...DARWIN_ARM64,
+    nodeVersion: "20.18.0",
+    runtime: FLEXDESIGNER,
+    loadCanvas: () => ({ ok: true, target: "darwin-arm64" }),
+  });
+
+  // The build refuses the same package, so the doctor never passes what bundleNativeCanvas would reject.
+  assert.throws(
+    () => nativeCanvas.assertNativePackage(windowsDir, windows.name, CANVAS_VERSION, "win32-x64"),
+    /incomplete, missing icudtl\.dat/
+  );
+  const incomplete = doctor();
+  assert.equal(incomplete.ok, false);
+  const [arm64, win] = allById(incomplete, "canvas-native");
+  assert.equal(arm64.status, "pass");
+  assert.equal(win.status, "fail");
+  assert.equal(win.target, "win32-x64");
+  assert.match(win.en, /@napi-rs\/canvas-win32-x64-msvc is incomplete, missing icudtl\.dat/);
+  assert.match(win.zh, /缺少 icudtl\.dat/);
+  assert.equal(win.fix.en.includes("`FLEX_TARGET=darwin-arm64,win32-x64 npm run build`"), true);
+
+  fs.writeFileSync(path.join(windowsDir, "icudtl.dat"), "icu");
+  nativeCanvas.assertNativePackage(windowsDir, windows.name, CANVAS_VERSION, "win32-x64");
+  const complete = doctor();
+  assert.equal(complete.ok, true, statuses(complete).join(" "));
+  assert.deepEqual(allById(complete, "canvas-native").map((item) => item.status), ["pass", "pass"]);
+});
+
 test("runDoctor reports unsupported FLEX_TARGET values like the build and skips the load test", (t) => {
   const pluginDir = makePluginDir(t, { targets: ["darwin-arm64"] });
   const report = runDoctor({

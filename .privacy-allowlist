@@ -1,0 +1,16 @@
+# Checked false positives for scripts/check-privacy.cjs (see CLAUDE.md "Privacy rules").
+#
+# Format: <detector|*> <path-glob> [<literal>]
+#   A finding is allowed when its detector and path match and, if a literal is given, the matched text contains it.
+#   Globs: * (within a folder), ** (any depth), ?. Keep entries as narrow as possible and justify each one above it.
+#   Pattern detectors do not scan this file itself; the local denylist does, and can never be allowlisted here.
+#   Never add one of your own identifiers: remove it from the content instead.
+
+# Upstream-authored (ENIAC-Tech, commit 9434459): screenshot taken on the upstream developer's Flexbar, its serial is
+# in the file name. Already public upstream; renaming it would only diverge from upstream without removing it.
+device-serial assets/Flexbar-7C3502BA2010-screenshot-*.jpg 7C3502BA2010
+device-serial README.md 7C3502BA2010
+
+# Upstream-authored (ENIAC-Tech, commit 9434459): Windows session-path fixtures use the upstream developer's account
+# name. Already public upstream and not ours to rewrite; new fixtures use placeholders such as C:\Users\me.
+personal-path test/collectors.test.js tongy

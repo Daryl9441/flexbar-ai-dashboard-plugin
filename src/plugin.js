@@ -25,6 +25,7 @@ const {
   createRateLimitedLogger,
   installUnhandledRejectionGuard,
   safeCall,
+  waitAtMost,
 } = require("./dashboard/hostSafety");
 const { createKeyDrawCache } = require("./dashboard/keyDrawCache");
 const { DEFAULT_LANGUAGE, t } = require("./dashboard/i18n");
@@ -67,6 +68,16 @@ const NEW_SESSION_CID = "com.aspen.flexbar-ai-dashboard.new-session";
 const DASHBOARD_CIDS = new Set([SESSION_CID, TOKEN_USAGE_CID, PLAN_USAGE_CID, RESET_TIMER_CID, SKILL_CID, NEW_SESSION_CID]);
 const SNACKBAR_MAX_LENGTH = 63;
 const SESSION_INTERVAL_MS = 2_000;
+// Keys that need no AI snapshot (a lone New Codex Session key) still get this
+// slow redraw tick, so the cache's periodic re-send and the probe of an
+// unplugged device keep working without running the snapshot collectors.
+const KEY_REDRAW_INTERVAL_MS = 15_000;
+// Redraw a reconnected device slightly after keyDrawCache stops holding its draws.
+const RECONNECT_REDRAW_MARGIN_MS = 100;
+// The SDK sends getConfig()/setConfig() without a timeout; never let a host
+// that does not answer block key drawing or the settings page.
+const HOST_CONFIG_SYNC_TIMEOUT_MS = 5_000;
+const HOST_CONFIG_SAVE_TIMEOUT_MS = 10_000;
 const USAGE_INTERVAL_MS = 30_000;
 const SNAPSHOT_LOG_HEARTBEAT_MS = 60_000;
 
@@ -88,6 +99,8 @@ const assignedSessionByKey = new Map();
 const dashboardState = createDashboardState();
 let latestSnapshot = null;
 let snapshotTimer = null;
+let redrawTimer = null;
+let reconnectRedrawTimer = null;
 let snapshotInFlight = false;
 let usageCache = null;
 let lastUsageAt = 0;
@@ -96,7 +109,12 @@ let lastLoggedSnapshot = "";
 let lastSnapshotLogAt = 0;
 const initialPluginConfigState = loadPluginConfigState(plugin.directory);
 let pluginConfig = initialPluginConfigState.config;
+// Bumped whenever the config is saved or pushed by the host, so a getConfig()
+// answer that was requested before that change cannot overwrite it.
+let pluginConfigRevision = 0;
 let hostPluginConfigSynced = false;
+// { promise, deadline } while the host has not answered getConfig().
+let hostConfigSync = null;
 
 if (initialPluginConfigState.warning) {
   logger.warn(initialPluginConfigState.warning);
@@ -104,6 +122,8 @@ if (initialPluginConfigState.warning) {
 
 plugin.on("ui.message", async (payload) => {
   updateHostLanguage(payload);
+  // Bounded: a host that never answers getConfig() delays one reply by at most
+  // HOST_CONFIG_SYNC_TIMEOUT_MS instead of hanging the settings page.
   await ensureHostPluginConfigSynced();
 
   if (payload && payload.type === "language") {
@@ -191,8 +211,12 @@ plugin.on("device.status", (devices) => {
 plugin.on("plugin.alive", async (payload) => {
   logger.info("Plugin alive:", payload);
   updateHostLanguage(payload);
-  await ensureHostPluginConfigSynced();
+  // Ask the host for its config first so the first snapshot can wait for it,
+  // but draw the keys right away: getConfig() has no SDK timeout, and keys
+  // must never stay on their default icon because the host did not answer.
+  const configSynced = ensureHostPluginConfigSynced();
   handleKeysLoaded(payload);
+  await configSynced;
 });
 
 plugin.on("device.newPage", (payload) => {
@@ -223,21 +247,55 @@ plugin.on("plugin.config.updated", (payload) => {
   logger.info("Plugin config updated:", payload);
   updateHostLanguage(payload);
   pluginConfig = mergePluginConfigs(pluginConfig, payload && (payload.config ?? payload));
+  pluginConfigRevision += 1;
   writePluginConfigFile(plugin.directory, pluginConfig);
-  if (dashboardKeys.size > 0) {
+  if (hasSnapshotKeys()) {
     refreshSnapshotInBackground();
     return;
   }
   drawDashboardKeys();
 });
 
-async function ensureHostPluginConfigSynced() {
-  if (hostPluginConfigSynced || typeof plugin.getConfig !== "function") return;
-  hostPluginConfigSynced = true;
+/**
+ * Merges the host's copy of the plugin config once. Resolves when it is
+ * merged, or at the latest HOST_CONFIG_SYNC_TIMEOUT_MS after it was requested:
+ * the SDK sends getConfig() without a timeout, so a host that never answers
+ * would otherwise block every caller forever. Never rejects.
+ */
+function ensureHostPluginConfigSynced() {
+  return waitForHostPluginConfigSync(startHostPluginConfigSync());
+}
 
-  const result = await callHost("Sync plugin config from host", () => plugin.getConfig());
-  if (!result.ok) {
-    hostPluginConfigSynced = false;
+function startHostPluginConfigSync() {
+  if (hostPluginConfigSynced || typeof plugin.getConfig !== "function") return null;
+  if (hostConfigSync) return hostConfigSync;
+
+  const revision = pluginConfigRevision;
+  const sync = { deadline: Date.now() + HOST_CONFIG_SYNC_TIMEOUT_MS, promise: null };
+  hostConfigSync = sync;
+  sync.promise = callHost("Sync plugin config from host", () => plugin.getConfig())
+    .then((result) => applyHostPluginConfig(result, revision))
+    .catch((error) => hostLog.warn("configSync", "Failed to apply host plugin config:", error))
+    .finally(() => {
+      if (hostConfigSync === sync) hostConfigSync = null;
+    });
+  return sync;
+}
+
+/** Waits (bounded) for a pending getConfig() without sending a new one. */
+function waitForHostPluginConfigSync(sync = hostConfigSync) {
+  if (!sync) return Promise.resolve(false);
+  return waitAtMost(sync.promise, sync.deadline - Date.now());
+}
+
+function applyHostPluginConfig(result, revision) {
+  // Unanswered with an error: stay unsynced so the next ui.message or
+  // plugin.alive asks again.
+  if (!result.ok) return;
+  hostPluginConfigSynced = true;
+  if (revision !== pluginConfigRevision) {
+    // Saved or pushed while this (late) answer was pending: the newer config wins.
+    logger.info("Ignoring host plugin config answer that predates a newer config change");
     return;
   }
 
@@ -258,10 +316,16 @@ async function savePluginConfig(config) {
   }
 
   pluginConfig = candidate;
+  pluginConfigRevision += 1;
   writePluginConfigFile(plugin.directory, pluginConfig);
 
   if (typeof plugin.setConfig === "function") {
-    const result = await callHost("Save plugin config", () => plugin.setConfig(pluginConfig), "error");
+    const result = await callHost(
+      "Save plugin config",
+      () => plugin.setConfig(pluginConfig),
+      "error",
+      HOST_CONFIG_SAVE_TIMEOUT_MS
+    );
     if (!result.ok) {
       const { error } = result;
       return { ok: false, error: error && error.message ? error.message : String(error) };
@@ -285,17 +349,21 @@ function updateHostLanguage(payload) {
 }
 
 function handleDeviceStatus(payload) {
-  let redraw = false;
-  for (const { serialNumber, status } of extractDeviceStatuses(payload)) {
-    if (status === "connected") {
-      // The device screen may have been reset while it was away: redraw all of its keys.
-      keyDrawCache.markDeviceConnected(serialNumber);
-      redraw = redraw || hasDashboardKeysOn(serialNumber);
-    } else if (status === "disconnected") {
-      keyDrawCache.markDeviceDisconnected(serialNumber);
-    }
-  }
-  if (redraw) drawDashboardKeys();
+  // A reconnected device was reset while it was away, so all of its keys are
+  // redrawn. FlexDesigner reloads them with plugin.alive about 0.5s later,
+  // which redraws them at once; keyDrawCache holds the device's draws until
+  // then so each key is drawn once. Redraw after the grace period in case that
+  // reload never comes.
+  const reconnected = keyDrawCache.applyDeviceStatuses(extractDeviceStatuses(payload));
+  if (reconnected.some(hasDashboardKeysOn)) scheduleReconnectRedraw();
+}
+
+function scheduleReconnectRedraw() {
+  if (reconnectRedrawTimer) clearTimeout(reconnectRedrawTimer);
+  reconnectRedrawTimer = setTimeout(() => {
+    reconnectRedrawTimer = null;
+    drawDashboardKeys();
+  }, keyDrawCache.reloadGraceMs + RECONNECT_REDRAW_MARGIN_MS);
 }
 
 function hasDashboardKeysOn(serialNumber) {
@@ -340,13 +408,9 @@ function handleKeysLoaded(payload) {
     }
   }
 
-  if (loadedDashboardKey) {
-    // Shows the latest data right away, or "loading" until the first snapshot.
-    drawDashboardKeys();
-    if (hasSnapshotKeys()) startSnapshotLoop();
-  }
-
-  stopSnapshotLoopIfIdle();
+  // Shows the latest data right away, or "loading" until the first snapshot.
+  if (loadedDashboardKey) drawDashboardKeys();
+  syncRefreshLoops();
 }
 
 function handleKeysRemoved(payload) {
@@ -364,7 +428,7 @@ function handleKeysRemoved(payload) {
     }
   }
 
-  stopSnapshotLoopIfIdle();
+  syncRefreshLoops();
 }
 
 async function handleKeyInteraction(payload) {
@@ -406,6 +470,25 @@ async function handleKeyInteraction(payload) {
   }
 }
 
+// Runs the 2s snapshot loop while a key needs AI data, otherwise only the slow
+// redraw tick while any dashboard key is loaded, otherwise nothing.
+function syncRefreshLoops() {
+  if (hasSnapshotKeys()) {
+    startSnapshotLoop();
+  } else if (snapshotTimer) {
+    clearInterval(snapshotTimer);
+    snapshotTimer = null;
+  }
+
+  const needsRedrawLoop = !snapshotTimer && dashboardKeys.size > 0;
+  if (needsRedrawLoop && !redrawTimer) {
+    redrawTimer = setInterval(drawDashboardKeys, KEY_REDRAW_INTERVAL_MS);
+  } else if (!needsRedrawLoop && redrawTimer) {
+    clearInterval(redrawTimer);
+    redrawTimer = null;
+  }
+}
+
 function startSnapshotLoop() {
   if (snapshotTimer) return;
 
@@ -415,12 +498,6 @@ function startSnapshotLoop() {
 
 function refreshSnapshotInBackground() {
   return runInBackground("Refresh AI snapshot", refreshSnapshot);
-}
-
-function stopSnapshotLoopIfIdle() {
-  if (hasSnapshotKeys() || !snapshotTimer) return;
-  clearInterval(snapshotTimer);
-  snapshotTimer = null;
 }
 
 function hasSnapshotKeys() {
@@ -444,13 +521,17 @@ async function collectRecentProjectsSnapshot() {
 
 async function refreshSnapshot() {
   if (!hasSnapshotKeys()) {
-    stopSnapshotLoopIfIdle();
+    syncRefreshLoops();
     return;
   }
   if (snapshotInFlight) return;
   snapshotInFlight = true;
 
   try {
+    // Collect with the host's path overrides when they are on their way. Keys
+    // are already drawn ("loading" or the previous data), and this waits at
+    // most until the sync deadline, without sending another getConfig().
+    await waitForHostPluginConfigSync();
     const now = Date.now();
     const includeUsage = !usageCache || now - lastUsageAt >= USAGE_INTERVAL_MS;
     const collectorOptions = collectorOptionsFromConfig(pluginConfig);
@@ -615,8 +696,8 @@ function ensureKeyStyle(key) {
   return key.style;
 }
 
-function callHost(label, call, level = "warn") {
-  return safeCall(label, call, { log: hostLog, level });
+function callHost(label, call, level = "warn", timeoutMs = 0) {
+  return safeCall(label, call, { log: hostLog, level, timeoutMs });
 }
 
 function runInBackground(label, task) {

@@ -30,9 +30,11 @@ function extractInteractionKey(payload) {
 }
 
 /**
- * Normalizes `device.status` payloads. FlexDesigner sends an array such as
- * [{ serialNumber, status: "connected", deviceData }] or
- * [{ serialNumber, status: "disconnected", _removeDevice: true }].
+ * Normalizes `device.status` payloads. FlexDesigner sends one array per event;
+ * an unplug produces two events and a replug one:
+ *   [{ serialNumber, status: "disconnected", _removeDevice: false, _sendWebEvent: false }]
+ *   [{ serialNumber, status: "disconnected", _removeDevice: true, _sendWebEvent: true }]
+ *   [{ serialNumber, status: "connected", deviceData, _removeDevice: true, _sendWebEvent: true }]
  * Returns [{ serialNumber, status: "connected" | "disconnected" }] and drops
  * entries with an unknown status or no serial number.
  */
@@ -55,9 +57,12 @@ function extractDeviceStatuses(payload) {
 
 function deviceConnectionStatus(item) {
   if (!item || typeof item !== "object") return null;
-  if (item._removeDevice === true) return "disconnected";
-  const status = String(item.status || "").toLowerCase();
+  // An explicit status always wins: every real reconnect event carries
+  // `_removeDevice: true` next to `status: "connected"`.
+  const status = String(item.status || "").trim().toLowerCase();
   if (status === "connected" || status === "disconnected") return status;
+  // Only a payload without a usable status falls back to the removal flag.
+  if (item._removeDevice === true) return "disconnected";
   return null;
 }
 

@@ -759,8 +759,8 @@ const FAKE_UUID = "com.aspen.flexbar-ai-dashboard";
 const aliveOnRealDevice = {
   serialNumber: REAL_SERIAL,
   keys: [
-    { uid: 1, cid: `${FAKE_UUID}.session`, width: 240, title: "x", style: {}, data: { dataSource: "codex" } },
-    { uid: 2, cid: `${FAKE_UUID}.plan-usage`, width: 240, title: "x", style: {}, data: { dataSource: "codex" } },
+    { uid: 1, cid: `${FAKE_UUID}.session`, width: 240, title: "x", style: {}, data: { sessionTitleMode: "initial" } },
+    { uid: 2, cid: `${FAKE_UUID}.plan-usage`, width: 240, title: "x", style: {}, data: {} },
     { uid: 7, cid: `${FAKE_UUID}.new-session`, width: 240, title: "x", style: {}, data: { projectPath: "/tmp/demo" } },
   ],
 };

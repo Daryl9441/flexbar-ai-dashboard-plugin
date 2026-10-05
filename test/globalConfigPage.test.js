@@ -20,7 +20,7 @@ test("global config page persists through FlexDesigner setConfig", async () => {
         saved.push(payload.config);
         return { ok: true, config: payload.config };
       }
-      if (payload.type === "setupStatus") return { codex: {}, claude: {} };
+      if (payload.type === "setupStatus") return { codex: {} };
       if (payload.type === "snapshot") return null;
       if (payload.type === "pathDefaults") return [];
       return {};
@@ -43,12 +43,12 @@ test("global config page persists through FlexDesigner setConfig", async () => {
     },
   ];
   view.applyPluginSettings({
-    overwriteStatusLine: false,
     pathOverrides: { CODEX_HOME: "/custom/codex" },
   });
   await view.applyPathOverrides();
 
   assert.equal(saved.length, 1);
+  assert.deepEqual(Object.keys(saved[0]), ["pathOverrides"]);
   assert.equal(saved[0].pathOverrides.CODEX_HOME, "/custom/codex");
   assert.equal(setConfigCalls.length, 1);
   assert.equal(setConfigCalls[0].pathOverrides.CODEX_HOME, "/custom/codex");
@@ -76,7 +76,6 @@ test("global config page surfaces backend path validation errors", async () => {
   });
 
   view.applyPluginSettings({
-    overwriteStatusLine: false,
     pathOverrides: { CODEX_HOME: "/nope" },
   });
   await view.applyPathOverrides();
@@ -91,14 +90,12 @@ test("global config page prefers hosted modelValue.config over backend defaults"
   const { view } = mountConfigComponent(component, {
     modelValue: {
       config: {
-        overwriteStatusLine: true,
         pathOverrides: { CODEX_HOME: "/hosted/codex" },
       },
     },
     async sendToBackend(payload) {
       if (payload.type === "getPluginConfig") {
         return {
-          overwriteStatusLine: false,
           pathOverrides: { CODEX_HOME: "/backend/codex" },
         };
       }
@@ -108,9 +105,80 @@ test("global config page prefers hosted modelValue.config over backend defaults"
 
   await view.loadInitialSettings();
 
-  assert.equal(view.pluginSettings.overwriteStatusLine, true);
   assert.equal(view.pluginSettings.pathOverrides.CODEX_HOME, "/hosted/codex");
 });
+
+test("global config page reports Codex status only and ignores settings older versions saved", async () => {
+  const component = loadVueComponent("global_config.vue");
+  const requested = [];
+  const { view } = mountConfigComponent(component, {
+    modelValue: { config: { overwriteStatusLine: true, pathOverrides: {} } },
+    async sendToBackend(payload) {
+      requested.push(payload.type);
+      if (payload.type === "getPluginConfig") return { pathOverrides: { CODEX_HOME: "/backend/codex" } };
+      if (payload.type === "setupStatus") {
+        return { codex: { codexHome: "/Users/me/.codex", codexHomeExists: true, authJsonExists: true, sessionsDir: "/Users/me/.codex/sessions", sessionsDirExists: true } };
+      }
+      if (payload.type === "pathDefaults") return [];
+      return null;
+    },
+  });
+
+  // A hosted config that only holds a removed setting falls back to the backend copy.
+  await view.loadInitialSettings();
+  assert.equal(view.pluginSettings.pathOverrides.CODEX_HOME, "/backend/codex");
+  assert.deepEqual(Object.keys(view.buildConfigPayload()), ["pathOverrides"]);
+
+  await view.refresh();
+  assert.deepEqual(Array.from(view.statusItems, (item) => item.label), ["Codex home", "Codex auth", "Codex sessions"]);
+  assert.equal(view.overallReady, true);
+  assert.deepEqual(requested.sort(), ["getPluginConfig", "pathDefaults", "setupStatus", "snapshot"]);
+});
+
+test("global config page ignores Claude path overrides older versions saved", async () => {
+  const component = loadVueComponent("global_config.vue");
+  const legacyOverrides = {
+    CLAUDE_CONFIG_DIR: "/Users/me/.claude",
+    FLEXBAR_AI_CLAUDE_EVENTS: "/Users/me/.flexbar-ai-dashboard/events.jsonl",
+  };
+  const requested = [];
+  const backend = async (payload) => {
+    requested.push(payload.type);
+    if (payload.type === "getPluginConfig") return { pathOverrides: { CODEX_HOME: "/Users/me/custom-codex" } };
+    return {};
+  };
+
+  // A hosted config whose only overrides are removed ones falls back to the backend copy.
+  const fallback = mountConfigComponent(component, {
+    modelValue: { config: { pathOverrides: { CODEX_HOME: "", ...legacyOverrides } } },
+    sendToBackend: backend,
+  }).view;
+  await fallback.loadInitialSettings();
+  assert.deepEqual(requested, ["getPluginConfig"]);
+  assert.deepEqual(plain(fallback.pluginSettings), { pathOverrides: { CODEX_HOME: "/Users/me/custom-codex" } });
+  assert.deepEqual(plain(fallback.savedPluginSettings), plain(fallback.pluginSettings));
+
+  // A hosted Codex override is used as is, without the removed keys.
+  requested.length = 0;
+  const hosted = mountConfigComponent(component, {
+    modelValue: { config: { pathOverrides: { CODEX_HOME: "/hosted/codex", ...legacyOverrides } } },
+    sendToBackend: backend,
+  }).view;
+  await hosted.loadInitialSettings();
+  assert.deepEqual(requested, []);
+  assert.deepEqual(plain(hosted.buildConfigPayload()), { pathOverrides: { CODEX_HOME: "/hosted/codex" } });
+
+  // Typing the saved value back leaves nothing to apply.
+  hosted.pathFields = [{ key: "CODEX_HOME", label: "Codex home", resolved: "/Users/me/.codex", description: "" }];
+  hosted.updatePathOverride("CODEX_HOME", "/elsewhere");
+  assert.equal(hosted.pathOverridesDirty, true);
+  hosted.updatePathOverride("CODEX_HOME", "/hosted/codex");
+  assert.equal(hosted.pathOverridesDirty, false);
+});
+
+function plain(value) {
+  return JSON.parse(JSON.stringify(value));
+}
 
 function loadVueComponent(fileName) {
   const content = fs.readFileSync(path.join(UI_DIR, fileName), "utf8");
@@ -135,11 +203,9 @@ function mountConfigComponent(component, options = {}) {
     modelValue: options.modelValue || { config: {} },
     pathFields: [],
     pluginSettings: {
-      overwriteStatusLine: false,
       pathOverrides: {},
     },
     savedPluginSettings: {
-      overwriteStatusLine: false,
       pathOverrides: {},
     },
     settingsLoaded: false,
@@ -161,9 +227,10 @@ function mountConfigComponent(component, options = {}) {
   }
 
   for (const [name, descriptor] of Object.entries(component.computed || {})) {
+    const get = typeof descriptor === "function" ? descriptor : descriptor.get;
     Object.defineProperty(view, name, {
       enumerable: true,
-      get: descriptor.get ? descriptor.get.bind(view) : undefined,
+      get: get ? get.bind(view) : undefined,
       set: descriptor.set ? descriptor.set.bind(view) : undefined,
     });
   }

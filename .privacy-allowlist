@@ -10,7 +10,3 @@
 # in the file name. Already public upstream; renaming it would only diverge from upstream without removing it.
 device-serial assets/Flexbar-7C3502BA2010-screenshot-*.jpg 7C3502BA2010
 device-serial README.md 7C3502BA2010
-
-# Upstream-authored (ENIAC-Tech, commit 9434459): Windows session-path fixtures use the upstream developer's account
-# name. Already public upstream and not ours to rewrite; new fixtures use placeholders such as C:\Users\me.
-personal-path test/collectors.test.js tongy

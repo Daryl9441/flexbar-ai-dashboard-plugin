@@ -344,9 +344,9 @@ function checkNativeCanvas(pluginDir, target, canvasVersion, targets, installedP
     "canvas-native",
     "fail",
     `Native canvas for ${target}: ${name} ${problem.en}${found}. ` +
-      `On ${target}, ${CANVAS_PACKAGE} cannot load, so keys only show their default icons instead of Codex/Claude data.`,
+      `On ${target}, ${CANVAS_PACKAGE} cannot load, so keys only show their default icons instead of Codex data.`,
     `${target} 的原生 canvas：${name} ${problem.zh}${foundZh}。` +
-      `在 ${target} 上 ${CANVAS_PACKAGE} 无法加载，按键只会显示默认图标，不会显示 Codex/Claude 数据。`,
+      `在 ${target} 上 ${CANVAS_PACKAGE} 无法加载，按键只会显示默认图标，不会显示 Codex 数据。`,
     rebuildFix(targets)
   );
   return { ...check, target };

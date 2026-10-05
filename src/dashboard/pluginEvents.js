@@ -77,11 +77,6 @@ function tokenDisplayModeFromKey(key) {
   return data.tokenDisplayMode === "recentChart" ? "recentChart" : "summary";
 }
 
-function dataSourceFromKey(key) {
-  const data = keyConfigFromKey(key);
-  return data.dataSource === "claude" ? "claude" : "codex";
-}
-
 function newSessionConfigFromKey(key) {
   const data = keyConfigFromKey(key);
   return {
@@ -121,7 +116,7 @@ function rootConfigFromKey(key) {
   if (!key || typeof key !== "object" || Array.isArray(key)) return {};
 
   const config = {};
-  for (const name of ["dataSource", "sessionTitleMode", "titleMode", "tokenDisplayMode", "mode", "projectPath", "prompt"]) {
+  for (const name of ["sessionTitleMode", "titleMode", "tokenDisplayMode", "mode", "projectPath", "prompt"]) {
     if (Object.prototype.hasOwnProperty.call(key, name)) {
       config[name] = key[name];
     }
@@ -130,7 +125,6 @@ function rootConfigFromKey(key) {
 }
 
 module.exports = {
-  dataSourceFromKey,
   extractDeviceStatuses,
   extractInteractionKey,
   extractLoadedKeys,

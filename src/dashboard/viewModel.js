@@ -134,6 +134,198 @@ function applyOverviewTitleMode(overview, mode) {
   };
 }
 
+const AUTOMATION_OVERVIEW_LIMIT = 6;
+const MINUTE_MS = 60_000;
+const DAY_MS = 24 * 60 * MINUTE_MS;
+// Statuses that mean the task no longer exists in the app.
+const AUTOMATION_GONE_STATUS = /delet|archiv/i;
+// The app inserts a run as IN_PROGRESS when it starts and moves it to PENDING_REVIEW
+// when it ends (then ACCEPTED or ARCHIVED). A run left IN_PROGRESS by an app that quit
+// mid-run is only cleaned up on the app's next start, so an older one no longer counts.
+const AUTOMATION_RUN_IN_PROGRESS = /^in[_\s-]?progress$/i;
+const AUTOMATION_RUN_STALE_MS = 2 * 60 * MINUTE_MS;
+// Between "Running" and the next run. Thin spaces: the key font's middle dot already
+// has wide side bearings.
+const AUTOMATION_LABEL_SEPARATOR = "\u2009\u00b7\u2009";
+
+// The Codex app's scheduled tasks ("Automations"), soonest first: running tasks, then
+// active tasks by next run (overdue ones first), then active ones without a next run,
+// then paused and other statuses, most recently changed first. Keeps the first `limit`.
+// Statuses: running and due (blue), scheduled (green), unscheduled (active without a
+// next run), paused and other (gray).
+function buildAutomationOverview(snapshot, options = {}) {
+  const language = normalizeLanguage(options.language);
+  const now = Number.isFinite(Number(options.now)) ? Number(options.now) : Date.now();
+  const limit = Number.isFinite(Number(options.limit))
+    ? Math.max(0, Math.floor(Number(options.limit)))
+    : AUTOMATION_OVERVIEW_LIMIT;
+  const source = snapshot && snapshot.automations && typeof snapshot.automations === "object"
+    ? snapshot.automations
+    : null;
+  const rows = source && Array.isArray(source.items) ? source.items.filter((item) => item && typeof item === "object") : [];
+  const listed = rows.filter((item) => !isGoneAutomation(item));
+  // Rows past the collector's cap were counted but not read: they still count as tasks.
+  const unread = Math.max(0, (Number(source && source.total) || 0) - rows.length);
+
+  const ranked = listed
+    .map((item, index) => ({ item, index, group: automationGroup(item, now) }))
+    .sort(compareAutomationEntries)
+    .slice(0, limit);
+
+  return {
+    available: Boolean(source && source.available),
+    reason: source && typeof source.reason === "string" ? source.reason : null,
+    total: listed.length + unread,
+    items: ranked.map(({ item }) => automationItemView(item, now, language)),
+  };
+}
+
+function isGoneAutomation(item) {
+  return AUTOMATION_GONE_STATUS.test(String(item.rawStatus || item.status || ""));
+}
+
+function automationStatus(item) {
+  return typeof item.status === "string" && item.status ? item.status.toLowerCase() : "active";
+}
+
+function automationNextRun(item) {
+  const value = Number(item.nextRunAt);
+  return item.nextRunAt !== null && item.nextRunAt !== undefined && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+// When the latest run started (or last changed), or 0 when the run has no timestamp.
+function automationRunStartedAt(item) {
+  const run = item.lastRun;
+  return run ? Number(run.createdAt) || Number(run.updatedAt) || 0 : 0;
+}
+
+// The task's latest run is still in progress. A run without any timestamp is trusted.
+function isRunningAutomation(item, now) {
+  const run = item.lastRun;
+  if (!run || !AUTOMATION_RUN_IN_PROGRESS.test(String(run.status || ""))) return false;
+  const lastChange = Math.max(Number(run.createdAt) || 0, Number(run.updatedAt) || 0);
+  return lastChange <= 0 || now - lastChange <= AUTOMATION_RUN_STALE_MS;
+}
+
+// 0: running, 1: active with a next run, 2: active without one, 3: paused or anything else.
+function automationGroup(item, now) {
+  if (isRunningAutomation(item, now)) return 0;
+  if (automationStatus(item) !== "active") return 3;
+  return automationNextRun(item) === null ? 2 : 1;
+}
+
+function compareAutomationEntries(a, b) {
+  if (a.group !== b.group) return a.group - b.group;
+  if (a.group === 0) {
+    const delta = automationRunStartedAt(b.item) - automationRunStartedAt(a.item);
+    if (delta !== 0) return delta;
+  } else if (a.group === 1) {
+    const delta = automationNextRun(a.item) - automationNextRun(b.item);
+    if (delta !== 0) return delta;
+  } else if (a.group === 3) {
+    const delta = (Number(b.item.updatedAt) || 0) - (Number(a.item.updatedAt) || 0);
+    if (delta !== 0) return delta;
+  }
+  // Otherwise keep the collector's order (name, then id), so ties never swap between polls.
+  return a.index - b.index;
+}
+
+// timeLabel is the full label; shortTimeLabel is what the renderer falls back to when
+// a narrow key has no room for it ("Tmrw" for "Tmrw 09:00"). A running task that will
+// run again also has a mediumTimeLabel, tried in between ("Running · Tmrw" for
+// "Running · Tmrw 09:00", shortTimeLabel "Running"; thin spaces around the dot).
+function automationItemView(item, now, language) {
+  const status = automationStatus(item);
+  const nextRunAt = automationNextRun(item);
+  const view = {
+    id: item.id === undefined || item.id === null ? "" : String(item.id),
+    title: typeof item.name === "string" && item.name.trim() ? item.name : t(language, "untitled"),
+  };
+  const labeled = (fields, timeLabel, shortTimeLabel = timeLabel, mediumTimeLabel = null) => ({
+    ...view,
+    ...fields,
+    timeLabel,
+    shortTimeLabel,
+    ...(mediumTimeLabel ? { mediumTimeLabel } : {}),
+  });
+
+  if (isRunningAutomation(item, now)) {
+    const running = t(language, "automationRunning");
+    // A recurring task keeps its next run while a run is under way.
+    if (status === "active" && nextRunAt !== null && nextRunAt > now) {
+      const next = formatAutomationNextRun(nextRunAt, now, language);
+      const shortNext = formatAutomationNextRun(nextRunAt, now, language, { short: true });
+      return labeled(
+        { status: "running", statusColor: "blue" },
+        `${running}${AUTOMATION_LABEL_SEPARATOR}${next}`,
+        running,
+        shortNext === next ? null : `${running}${AUTOMATION_LABEL_SEPARATOR}${shortNext}`
+      );
+    }
+    return labeled({ status: "running", statusColor: "blue" }, running);
+  }
+  if (status === "active") {
+    // Active but with no run ahead (say a one-off that has run): nothing is scheduled.
+    if (nextRunAt === null) {
+      return labeled({ status: "unscheduled", statusColor: "gray" }, t(language, "automationNoNextRun"), "—");
+    }
+    if (nextRunAt <= now) return labeled({ status: "due", statusColor: "blue" }, t(language, "automationDue"));
+    return labeled(
+      { status: "scheduled", statusColor: "green" },
+      formatAutomationNextRun(nextRunAt, now, language),
+      formatAutomationNextRun(nextRunAt, now, language, { short: true })
+    );
+  }
+  if (status === "paused") return labeled({ status: "paused", statusColor: "gray" }, t(language, "automationPaused"));
+  return labeled({ status: "other", statusColor: "gray" }, otherAutomationStatusLabel(item.rawStatus || item.status));
+}
+
+// "NEEDS_REVIEW" -> "Needs review": the app's own word, untranslated; the renderer cuts
+// it to the room the key has.
+function otherAutomationStatusLabel(value) {
+  const text = String(value || "").replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+  if (!text) return "—";
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+// Next run in local time, 24h: "in 25m" under an hour ahead, then "14:30" (today),
+// "Tmrw 09:00", "Tue 09:00" (within 6 days) or "10/12 09:00". Days are counted on the
+// calendar, so midnight and DST changes land on the right day. options.short drops the
+// clock time from day labels ("Tmrw", "Tue", "10/12") and shortens minutes ("25m").
+function formatAutomationNextRun(nextRunAt, now, language, options = {}) {
+  const short = Boolean(options.short);
+  const ahead = Number(nextRunAt) - Number(now);
+  if (ahead < 60 * MINUTE_MS) {
+    const minutes = Math.min(59, Math.max(1, Math.ceil(ahead / MINUTE_MS)));
+    return t(language, short ? "automationInMinutesShort" : "automationInMinutes").replace("{n}", String(minutes));
+  }
+
+  const next = new Date(nextRunAt);
+  const time = `${pad2(next.getHours())}:${pad2(next.getMinutes())}`;
+  const withTime = (day) => (short ? day : `${day} ${time}`);
+  const days = calendarDaysBetween(now, nextRunAt);
+  if (days === 0) return time;
+  if (days === 1) return withTime(t(language, "automationTomorrow"));
+  if (days > 1 && days <= 6) {
+    const weekdays = t(language, "automationWeekdays").split(",");
+    return withTime(weekdays[next.getDay()]);
+  }
+  return withTime(`${pad2(next.getMonth() + 1)}/${pad2(next.getDate())}`);
+}
+
+// Whole local calendar days from `from` to `to` (0 = same day, 1 = the next day).
+function calendarDaysBetween(from, to) {
+  const a = new Date(from);
+  const b = new Date(to);
+  const dayA = Date.UTC(a.getFullYear(), a.getMonth(), a.getDate());
+  const dayB = Date.UTC(b.getFullYear(), b.getMonth(), b.getDate());
+  return Math.round((dayB - dayA) / DAY_MS);
+}
+
+function pad2(value) {
+  return String(value).padStart(2, "0");
+}
+
 function overviewStatusColor(status) {
   if (status === "approval") return "orange";
   if (status === "running") return "blue";
@@ -142,10 +334,7 @@ function overviewStatusColor(status) {
 
 function rankSessions(snapshot) {
   const providers = snapshot && snapshot.providers || {};
-  return [
-    ...providerSessions("codex", "Codex", providers.codex),
-    ...providerSessions("claude", "Claude", providers.claude),
-  ].sort((a, b) => {
+  return codexSessions(providers.codex).sort((a, b) => {
     const activeDelta = sessionActivityRank(a) - sessionActivityRank(b);
     if (activeDelta !== 0) return activeDelta;
     const timeDelta = sessionLastActivityValue(b) - sessionLastActivityValue(a);
@@ -167,20 +356,19 @@ function sessionLastActivityValue(session) {
   );
 }
 
-function providerSessions(providerKey, providerLabel, provider) {
-  if (!provider || !Array.isArray(provider.sessions)) return [];
+function codexSessions(codex) {
+  if (!codex || !Array.isArray(codex.sessions)) return [];
 
-  const activeId = provider.activeSession && provider.activeSession.id;
-  return provider.sessions
+  const activeId = codex.activeSession && codex.activeSession.id;
+  return codex.sessions
     .filter((session) => session && !session.archived && !session.internal)
     .map((session) => {
-      const isProviderActive = activeId && session.id === activeId;
+      const isActiveSession = activeId && session.id === activeId;
       return {
         ...session,
-        providerKey,
-        providerLabel,
-        key: `${providerKey}:${session.id || session.title || session.cwd || "unknown"}`,
-        activity: session.activity || (isProviderActive ? provider.activity : null) || { state: "idle" },
+        // Session keys keep their "codex:" prefix, so they match the keys used so far.
+        key: `codex:${session.id || session.title || session.cwd || "unknown"}`,
+        activity: session.activity || (isActiveSession ? codex.activity : null) || { state: "idle" },
       };
     });
 }
@@ -194,7 +382,6 @@ function buildSessionView(session, state, language) {
   return {
     id: session.id,
     sessionKey: session.key,
-    provider: session.providerLabel,
     title: titleFromSession(session, language),
     latestTitle: session.latestTitle || titleFromSession(session, language),
     tokenLabel: formatSessionTokens(session, language),
@@ -230,10 +417,7 @@ function buildTotalTokensView(snapshot, language) {
 
 function buildPlanUsageView(snapshot, language) {
   const providers = snapshot && snapshot.providers || {};
-  const items = [
-    ...quotaItems("Codex", providers.codex && providers.codex.quota, language),
-    ...quotaItems("Claude", providers.claude && providers.claude.quota, language),
-  ];
+  const items = quotaItems(providers.codex && providers.codex.quota, language);
 
   return {
     title: t(language, "planUsageTitle"),
@@ -242,11 +426,10 @@ function buildPlanUsageView(snapshot, language) {
   };
 }
 
-function quotaItems(provider, quota, language) {
+function quotaItems(quota, language) {
   return dedupeQuotaLimits(extractQuotaLimits(quota)).map((limit) => {
     const usedPercent = clampPercent(limit.usedPercent);
     return {
-      provider,
       label: quotaWindowLabel(limit.windowSeconds, language),
       usedPercent,
       remainingPercent: clampPercent(100 - usedPercent),
@@ -257,10 +440,7 @@ function quotaItems(provider, quota, language) {
 
 function buildResetTimerView(snapshot, language) {
   const providers = snapshot && snapshot.providers || {};
-  const items = [
-    ...resetTimerItems("Codex", providers.codex && providers.codex.quota, language),
-    ...resetTimerItems("Claude", providers.claude && providers.claude.quota, language),
-  ];
+  const items = resetTimerItems(providers.codex && providers.codex.quota, language);
 
   return {
     title: t(language, "resetTimerTitle"),
@@ -268,10 +448,9 @@ function buildResetTimerView(snapshot, language) {
   };
 }
 
-function resetTimerItems(provider, quota, language) {
+function resetTimerItems(quota, language) {
   return dedupeQuotaLimits(extractQuotaLimits(quota))
     .map((limit) => ({
-      provider,
       label: quotaWindowLabel(limit.windowSeconds, language),
       resetAtMs: toEpochMs(limit.resetAt),
       windowSeconds: limit.windowSeconds,
@@ -279,7 +458,7 @@ function resetTimerItems(provider, quota, language) {
     .filter((item) => item.resetAtMs !== null);
 }
 
-// Names that state their own length (Claude's five_hour / seven_day). Codex's
+// Names that state their own length (five_hour / seven_day, 5h). Codex's
 // "primary" / "secondary" say nothing about it: a plan may have only a weekly window.
 function namedQuotaWindowSeconds(label) {
   const text = String(label || "");
@@ -316,35 +495,15 @@ function toEpochMs(resetAt) {
 }
 
 function extractQuotaLimits(quota) {
-  if (!quota) return [];
-  if (Array.isArray(quota.limits)) {
-    return quota.limits
-      .map((limit) => ({
-        label: limit.label || limit.id || limit.window,
-        usedPercent: limit.usedPercent,
-        resetAt: limit.resetAt,
-        windowSeconds: positiveNumberOrNull(limit.windowSeconds) ?? namedQuotaWindowSeconds(limit.label || limit.id || limit.window),
-      }))
-      .filter((limit) => limit.usedPercent !== undefined || limit.resetAt);
-  }
-
-  const rateLimits = quota.rateLimits || quota.rate_limits;
-  if (rateLimits && typeof rateLimits === "object") {
-    return Object.entries(rateLimits)
-      .map(([key, value]) => {
-        if (!value || typeof value !== "object") return null;
-        return {
-          label: key,
-          usedPercent: value.used_percentage ?? value.usedPercent ?? value.utilization,
-          resetAt: value.resets_at ?? value.reset_at ?? value.resetAt,
-          windowSeconds: namedQuotaWindowSeconds(key),
-        };
-      })
-      .filter(Boolean)
-      .filter((limit) => limit.usedPercent !== undefined || limit.resetAt);
-  }
-
-  return [];
+  if (!quota || !Array.isArray(quota.limits)) return [];
+  return quota.limits
+    .map((limit) => ({
+      label: limit.label || limit.id || limit.window,
+      usedPercent: limit.usedPercent,
+      resetAt: limit.resetAt,
+      windowSeconds: positiveNumberOrNull(limit.windowSeconds) ?? namedQuotaWindowSeconds(limit.label || limit.id || limit.window),
+    }))
+    .filter((limit) => limit.usedPercent !== undefined || limit.resetAt);
 }
 
 // One item per window length: copies of a window (rateLimits vs rateLimitsByLimitId,
@@ -423,17 +582,9 @@ function formatToolAction(tool, action, completed, language) {
 
   switch (tool) {
     case "shell_command":
-    case "Bash":
       return `${t(language, completed ? "toolBashDone" : "toolBashDoing")}${detail}`;
-    case "Read":
-      return `${t(language, completed ? "toolReadDone" : "toolReadDoing")}${detail}`;
-    case "Edit":
-    case "MultiEdit":
-    case "Write":
     case "apply_patch":
       return `${t(language, completed ? "toolEditDone" : "toolEditDoing")}${detail}`;
-    case "Grep":
-    case "Glob":
     case "web_search":
     case "web_search_call":
       return `${t(language, completed ? "toolSearchDone" : "toolSearchDoing")}${detail}`;
@@ -590,15 +741,20 @@ function clampPercent(value) {
 }
 
 module.exports = {
+  AUTOMATION_OVERVIEW_LIMIT,
+  AUTOMATION_RUN_STALE_MS,
   SESSION_OVERVIEW_APPROVAL_STALE_MS,
   SESSION_OVERVIEW_RECENT_MS,
   SESSION_OVERVIEW_RUNNING_STALE_MS,
+  buildAutomationOverview,
   buildDashboardViewModel,
   buildSessionOverview,
   createDashboardState,
   applyOverviewTitleMode,
   applySessionTitleMode,
+  calendarDaysBetween,
   formatActivityText,
+  formatAutomationNextRun,
   namedQuotaWindowSeconds,
   quotaWindowLabel,
   rankSessions,

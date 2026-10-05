@@ -8,6 +8,7 @@
     "test": "node --test test/*.test.js",
     "check:privacy": "node scripts/check-privacy.cjs",
     "hooks:install": "git config core.hooksPath .githooks",
+    "icons": "node scripts/generate-icons.cjs --write",
     "dev": "npm run build && npm run doctor && npm-run-all plugin:unlink plugin:link -p plugin:watch plugin:debug",
     "plugin:watch": "rollup -c -w --watch.onEnd=\"npm run plugin:restart\"",
     "plugin:unlink": "node scripts/flexcli.cjs plugin unlink --uuid com.aspen.flexbar-ai-dashboard --silent",

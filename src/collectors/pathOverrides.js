@@ -1,12 +1,6 @@
 "use strict";
 
-const path = require("node:path");
-const {
-  resolveClaudeBridgePath,
-  resolveClaudeProjectRoots,
-  resolveCodexHome,
-  resolveHome,
-} = require("./paths");
+const { expandUserPath, resolveCodexHome } = require("./paths");
 
 /** @type {ReadonlyArray<{ key: string, label: string, description: string, placeholder: (env: NodeJS.ProcessEnv) => string }>} */
 const PATH_OVERRIDE_DEFINITIONS = [
@@ -16,25 +10,12 @@ const PATH_OVERRIDE_DEFINITIONS = [
     description: "Overrides CODEX_HOME when set.",
     placeholder: (env) => resolveCodexHome(env),
   },
-  {
-    key: "CLAUDE_CONFIG_DIR",
-    label: "Claude config directories",
-    description: "Comma-separated Claude config roots. Project logs are read from <dir>/projects.",
-    placeholder: (env) => defaultClaudeConfigDirPlaceholder(env),
-  },
-  {
-    key: "FLEXBAR_AI_CLAUDE_EVENTS",
-    label: "Claude bridge events file",
-    description: "Overrides FLEXBAR_AI_CLAUDE_EVENTS when set.",
-    placeholder: (env) => resolveClaudeBridgePath(env),
-  },
 ];
 
 function unwrapPluginConfigPayload(payload) {
   if (!payload || typeof payload !== "object") return {};
 
-  const hasPluginSettings = "pathOverrides" in payload || "overwriteStatusLine" in payload;
-  if (!hasPluginSettings && payload.config && typeof payload.config === "object") {
+  if (!("pathOverrides" in payload) && payload.config && typeof payload.config === "object") {
     return payload.config;
   }
 
@@ -59,11 +40,17 @@ function normalizePluginConfig(config) {
     normalizedOverrides[definition.key] = typeof value === "string" ? value : "";
   }
 
-  const { pathOverrides: _ignored, HOME: _legacyHome, ...rest } = root;
+  // Settings older versions saved that no longer exist are dropped, like path
+  // overrides without a definition above, so such a config still loads.
+  const {
+    pathOverrides: _ignored,
+    HOME: _legacyHome,
+    overwriteStatusLine: _legacyStatusLine,
+    ...rest
+  } = root;
 
   return {
     ...rest,
-    overwriteStatusLine: Boolean(root.overwriteStatusLine),
     pathOverrides: normalizedOverrides,
   };
 }
@@ -76,7 +63,9 @@ function envWithPathOverrides(config, baseEnv = process.env) {
     const value = overrides[definition.key];
     if (typeof value !== "string" || !value.trim()) continue;
 
-    env[definition.key] = value.trim();
+    // Expanded as validation expands it: "~/.codex" passes validation, and the
+    // collectors must not read it relative to the plugin's working directory.
+    env[definition.key] = expandUserPath(value, baseEnv);
   }
 
   return env;
@@ -88,10 +77,7 @@ function collectorOptionsFromConfig(config, extra = {}) {
   return {
     ...extra,
     env,
-    home: resolveHome(env),
     codexHome: resolveCodexHome(env),
-    bridgePath: resolveClaudeBridgePath(env),
-    claudeProjectRoots: resolveClaudeProjectRoots(env),
   };
 }
 
@@ -102,16 +88,6 @@ function listPathDefaults(baseEnv = process.env) {
     description: definition.description,
     resolved: definition.placeholder(baseEnv),
   }));
-}
-
-function defaultClaudeConfigDirPlaceholder(env = process.env) {
-  if (env.CLAUDE_CONFIG_DIR) return env.CLAUDE_CONFIG_DIR;
-
-  const home = resolveHome(env);
-  return [
-    path.join(home, ".config", "claude"),
-    path.join(home, ".claude"),
-  ].join(", ");
 }
 
 module.exports = {

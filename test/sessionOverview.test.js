@@ -29,9 +29,8 @@ const unknown = () => ({ state: "unknown", detail: "no session events", lastEven
 const session = (id, title, msBeforeNow, activity) => ({ id, title, lastActivityAt: iso(msBeforeNow), activity });
 const listed = (overview) => overview.items.map((item) => [item.title, item.status, item.statusColor]);
 
-function snapshotWith(codexSessions, claudeSessions = []) {
-  const provider = (name, sessions) => ({ provider: name, sessions, activeSession: null, activity: { state: "idle" } });
-  return { providers: { codex: provider("codex", codexSessions), claude: provider("claude", claudeSessions) } };
+function snapshotWith(sessions) {
+  return { providers: { codex: { provider: "codex", sessions, activeSession: null, activity: { state: "idle" } } } };
 }
 
 // A dashboard state that records every noteSession call.
@@ -62,7 +61,6 @@ test("overview lists approvals, then running, then recently finished sessions, e
     session("ask", "Install deps", 1 * MINUTE, approval(1 * MINUTE)),
     session("done-new", "Bump version", 5 * MINUTE, done(5 * MINUTE)),
     session("expired", "Finished an hour ago", 31 * MINUTE, done(31 * MINUTE)),
-  ], [
     session("run-new", "Write docs", 2_000, { state: "thinking", lastEventAt: iso(2_000) }),
     session("ask-old", "Run migration", 2 * HOUR, approval(2 * HOUR)),
   ]);
@@ -348,9 +346,14 @@ test("Codex app-server threads get per-thread activity from their recent rollout
 });
 
 // Runs plugin.js against a fake FlexDesigner SDK and snapshot collector, taps the
-// AI Session key on the scenario's schedule and prints every image drawn.
-// OVERVIEW_SCENARIO: { width, phases: [{ at, sessions }], taps: [ms], endAt }, with
-// sessions as { id, title, agoMs, state: "tool" | "done" } relative to the phase.
+// first AI Session key (else the first key) on the scenario's schedule and prints every
+// image drawn, what each tap drew before returning, and the options of every snapshot
+// collection. OVERVIEW_SCENARIO: { width, keys?: [{ cid, data }], alive?: [{ at, keys }],
+// phases: [{ at, sessions, quota?, automations? }], taps: [ms], messages?: [{ at,
+// payload }], intervalMs?, endAt }, with sessions as { id, title, agoMs, state: "tool" |
+// "done" } relative to the phase, automations as { id, name, status?, inMs? } (next run
+// inMs from now) and cid the key's suffix ("session", "plan-usage", ...). alive reloads
+// the page with another key list; intervalMs caps the timers (default 50ms).
 const FAKE_SDK_HOST = String.raw`
 const fs = require("node:fs");
 const os = require("node:os");
@@ -361,11 +364,12 @@ const scenario = JSON.parse(process.env.OVERVIEW_SCENARIO);
 const pluginDir = fs.mkdtempSync(path.join(os.tmpdir(), "flexbar-ai-dashboard-overview-"));
 const handlers = {};
 const draws = [];
+const snapshotCalls = [];
 const startedAt = Date.now();
 
 // Refresh snapshots every 50ms instead of every 2s so phases switch quickly.
 const realSetInterval = global.setInterval;
-global.setInterval = (fn, ms, ...args) => realSetInterval(fn, Math.min(ms, 50), ...args);
+global.setInterval = (fn, ms, ...args) => realSetInterval(fn, Math.min(ms, scenario.intervalMs || 50), ...args);
 
 function fake(request, exports) {
   const filename = require.resolve(request, { paths: [path.join(root, "src")] });
@@ -384,7 +388,7 @@ fake("@eniac/flexdesigner", {
     on(type, handler) { handlers[type] = handler; },
     start() {},
     draw(serialNumber, key, type, image) {
-      draws.push({ uid: key.uid, type, image });
+      draws.push({ uid: key.uid, type, image, title: key.title });
       return Promise.resolve({});
     },
     getConfig: () => Promise.resolve({}),
@@ -396,13 +400,23 @@ function codexSession({ id, title, agoMs, state }) {
   const activity = state === "done" ? { state: "idle", detail: "task_complete", lastEventAt: at } : { state, lastEventAt: at };
   return { id, title, lastActivityAt: at, activity };
 }
-const provider = (name, sessions) => ({ provider: name, sessions, activeSession: sessions[0] || null, activity: { state: "idle" }, usage: null, quota: null });
+function automationItem({ id, name, status = "active", inMs }) {
+  return { id, name, status, rawStatus: status.toUpperCase(), nextRunAt: inMs === undefined ? null : Date.now() + inMs, updatedAt: Date.now() };
+}
 fake(path.join(root, "src", "collectors", "snapshot.js"), {
-  collectAiSnapshot: async () => {
+  collectAiSnapshot: async (options = {}) => {
+    snapshotCalls.push({ automations: options.automations });
     const phase = scenario.phases.filter((item) => item.at <= Date.now() - startedAt).at(-1);
+    const sessions = phase.sessions.map(codexSession);
+    const automations = phase.automations && options.automations !== false
+      ? { available: true, reason: null, stale: false, total: phase.automations.length, items: phase.automations.map(automationItem) }
+      : undefined;
     return {
       collectedAt: new Date().toISOString(),
-      providers: { codex: provider("codex", phase.sessions.map(codexSession)), claude: provider("claude", []) },
+      providers: {
+        codex: { provider: "codex", sessions, activeSession: sessions[0] || null, activity: { state: "idle" }, usage: null, quota: phase.quota || null },
+      },
+      automations,
     };
   },
   compactSnapshot: (snapshot) => snapshot,
@@ -413,33 +427,64 @@ fake(path.join(root, "src", "dashboard", "render.js"), {
   ...render,
   renderSessionKey: (view) => "session:" + JSON.stringify({ title: view.title }),
   renderSessionOverviewKey: (view) => "overview:" + JSON.stringify(view.items.map((item) => [item.title, item.statusColor])),
+  renderAutomationOverviewKey: (view) => "automations:" + JSON.stringify(view.items.map((item) => [item.title, item.statusColor, item.timeLabel])),
+  renderPlanUsageKey: (view) => "plan:" + JSON.stringify(view.items.map((item) => [item.label, item.remainingPercent])),
 });
 
 require(path.join(root, "src", "plugin.js"));
-const key = { uid: 1, cid: "com.aspen.flexbar-ai-dashboard.session", width: scenario.width, title: "x", style: {}, data: { dataSource: "codex" } };
-const tap = () => handlers["plugin.data"]({ serialNumber: "001100AA0001", data: { evt: "click", key } });
-handlers["plugin.alive"]({ serialNumber: "001100AA0001", keys: [key] });
+const makeKeys = (list) => list.map((item, index) => ({
+  uid: index + 1,
+  cid: "com.aspen.flexbar-ai-dashboard." + item.cid,
+  width: scenario.width,
+  title: "x",
+  style: {},
+  data: item.data,
+}));
+let keys = makeKeys(scenario.keys || [{ cid: "session", data: { sessionTitleMode: "initial" } }]);
+const tapDraws = [];
+const tap = () => {
+  const key = keys.find((item) => item.cid.endsWith(".session")) || keys[0];
+  const before = draws.length;
+  handlers["plugin.data"]({ serialNumber: "001100AA0001", data: { evt: "click", key } });
+  // What the tap itself drew, synchronously, before any refresh tick could.
+  tapDraws.push(draws.slice(before).filter((d) => d.uid === key.uid).map((d) => (d.type === "base64" ? d.image : "draw:" + d.title)));
+};
+handlers["plugin.alive"]({ serialNumber: "001100AA0001", keys });
+for (const { at, keys: list } of scenario.alive || []) {
+  setTimeout(() => {
+    keys = makeKeys(list);
+    handlers["plugin.alive"]({ serialNumber: "001100AA0001", keys });
+  }, at);
+}
 for (const at of scenario.taps) setTimeout(tap, at);
+for (const { at, payload } of scenario.messages || []) setTimeout(() => handlers["ui.message"](payload), at);
 setTimeout(() => {
   fs.rmSync(pluginDir, { recursive: true, force: true });
-  process.stdout.write(JSON.stringify({ images: draws.filter((d) => d.type === "base64").map((d) => d.image) }));
+  const images = draws.filter((d) => d.type === "base64");
+  process.stdout.write(JSON.stringify({ images: images.map((d) => d.image), keyImages: images.map((d) => [d.uid, d.image]), tapDraws, snapshotCalls }));
   process.exit(0);
 }, scenario.endAt);
 `;
 
-async function runOverviewHost(scenario) {
-  const { images } = await new Promise((resolve, reject) => {
+function runOverviewHostOutput(scenario) {
+  return new Promise((resolve, reject) => {
     execFile(process.execPath, ["-e", FAKE_SDK_HOST], {
       encoding: "utf8",
       env: { ...process.env, PLUGIN_ROOT: path.join(__dirname, ".."), OVERVIEW_SCENARIO: JSON.stringify(scenario) },
       timeout: 30_000,
     }, (error, stdout, stderr) => (error ? reject(new Error(`${error.message}\n${stderr}`)) : resolve(JSON.parse(stdout))));
   });
-  return images.filter((image, index) => image !== images[index - 1]);
 }
 
-test("tapping an AI Session key toggles between its session and the all-sessions overview", async () => {
-  const distinct = await runOverviewHost({
+const withoutRepeats = (images) => images.filter((image, index) => image !== images[index - 1]);
+
+async function runOverviewHost(scenario) {
+  const { images } = await runOverviewHostOutput(scenario);
+  return withoutRepeats(images);
+}
+
+test("tapping an AI Session key cycles its session, the all-sessions overview and the scheduled tasks", async () => {
+  const { images, tapDraws, snapshotCalls } = await runOverviewHostOutput({
     width: 520,
     phases: [{
       at: 0,
@@ -447,16 +492,107 @@ test("tapping an AI Session key toggles between its session and the all-sessions
         { id: "a", title: "Running task", agoMs: 1_000, state: "tool" },
         { id: "b", title: "Finished task", agoMs: 60_000, state: "done" },
       ],
+      automations: [
+        { id: "t1", name: "Made-up weekly report", status: "paused" },
+        { id: "t2", name: "Made-up inbox sweep", inMs: 25 * 60_000 },
+      ],
+    }],
+    taps: [400, 800, 1_200, 1_600],
+    endAt: 2_000,
+  });
+
+  const views = [
+    "session:{\"title\":\"Running task\"}",
+    "overview:[[\"Running task\",\"blue\"],[\"Finished task\",\"green\"]]",
+    "automations:[[\"Made-up inbox sweep\",\"green\",\"in 25m\"],[\"Made-up weekly report\",\"gray\",\"Paused\"]]",
+  ];
+  assert.deepEqual(withoutRepeats(images), [views[0], views[1], views[2], views[0], views[1]]);
+  // Each tap redraws the key itself, without waiting for the next refresh tick.
+  assert.deepEqual(tapDraws, [[views[1]], [views[2]], [views[0]], [views[1]]]);
+  assert.ok(snapshotCalls.length > 0);
+  assert.ok(snapshotCalls.every((call) => call.automations === true), "an AI Session key needs the scheduled tasks");
+});
+
+test("a key showing the scheduled tasks takes no session slot", async () => {
+  const { keyImages } = await runOverviewHostOutput({
+    width: 520,
+    keys: [
+      { cid: "session", data: { sessionTitleMode: "initial" } },
+      { cid: "session", data: { sessionTitleMode: "initial" } },
+    ],
+    phases: [{
+      at: 0,
+      sessions: [
+        { id: "a", title: "Newest task", agoMs: 1_000, state: "tool" },
+        { id: "b", title: "Older task", agoMs: 5_000, state: "tool" },
+      ],
+      automations: [],
     }],
     taps: [400, 800],
     endAt: 1_200,
   });
 
-  assert.deepEqual(distinct, [
-    "session:{\"title\":\"Running task\"}",
-    "overview:[[\"Running task\",\"blue\"],[\"Finished task\",\"green\"]]",
-    "session:{\"title\":\"Running task\"}",
+  const imagesOf = (uid) => withoutRepeats(keyImages.filter(([key]) => key === uid).map(([, image]) => image));
+  assert.deepEqual(imagesOf(1), [
+    "session:{\"title\":\"Newest task\"}",
+    "overview:[[\"Newest task\",\"blue\"],[\"Older task\",\"blue\"]]",
+    "automations:[]",
   ]);
+  assert.deepEqual(imagesOf(2), [
+    "session:{\"title\":\"Older task\"}",
+    "session:{\"title\":\"Newest task\"}",
+  ], "the other key takes over the first session while key 1 shows a list");
+});
+
+test("scheduled tasks not collected yet show the loading look and are fetched at once", async () => {
+  // Only a Plan Usage key at first, so the snapshots skip the scheduled tasks; then an AI
+  // Session key is added and tapped twice before the next (real, 2s) refresh tick.
+  const plan = { cid: "plan-usage", data: {} };
+  const { keyImages, tapDraws, snapshotCalls } = await runOverviewHostOutput({
+    width: 520,
+    keys: [plan],
+    alive: [{ at: 300, keys: [plan, { cid: "session", data: { sessionTitleMode: "initial" } }] }],
+    phases: [{
+      at: 0,
+      sessions: [{ id: "a", title: "Running task", agoMs: 1_000, state: "tool" }],
+      automations: [{ id: "t1", name: "Made-up inbox sweep", inMs: 25 * 60_000 }],
+    }],
+    taps: [400, 500],
+    intervalMs: 60_000,
+    endAt: 900,
+  });
+
+  const sessionKeyImages = withoutRepeats(keyImages.filter(([uid]) => uid === 2).map(([, image]) => image));
+  assert.deepEqual(sessionKeyImages, [
+    "session:{\"title\":\"Running task\"}",
+    "overview:[[\"Running task\",\"blue\"]]",
+    "automations:[[\"Made-up inbox sweep\",\"green\",\"in 25m\"]]",
+  ], "never \"Scheduled tasks unavailable\" (automations:[]) while they were simply not read yet");
+  assert.deepEqual(tapDraws[1], ["draw:AI loading..."]);
+  assert.deepEqual(snapshotCalls, [{ automations: false }, { automations: true }], "the tap fetched them without waiting for the tick");
+});
+
+test("only AI Session keys collect scheduled tasks; the recent-projects list never does", async () => {
+  const planOnly = await runOverviewHostOutput({
+    width: 280,
+    keys: [{ cid: "plan-usage", data: {} }],
+    phases: [{ at: 0, sessions: [] }],
+    taps: [],
+    endAt: 400,
+  });
+  assert.ok(planOnly.snapshotCalls.length > 0);
+  assert.ok(planOnly.snapshotCalls.every((call) => call.automations === false));
+
+  // A lone New Codex Session key runs no snapshot loop; its project list collects once.
+  const recentProjects = await runOverviewHostOutput({
+    width: 240,
+    keys: [{ cid: "new-session", data: { mode: "codex", projectPath: "", prompt: "" } }],
+    phases: [{ at: 0, sessions: [] }],
+    taps: [],
+    messages: [{ at: 100, payload: { type: "recentProjects" } }],
+    endAt: 600,
+  });
+  assert.deepEqual(recentProjects.snapshotCalls, [{ automations: false }]);
 });
 
 test("leaving the overview marks only the finished sessions it showed as viewed", async () => {
@@ -469,9 +605,12 @@ test("leaving the overview marks only the finished sessions it showed as viewed"
   }));
   const distinct = await runOverviewHost({
     width: 240,
-    phases: [{ at: 0, sessions: sessions("tool", 1_000) }, { at: 300, sessions: sessions("done", 2 * 3600_000) }],
-    taps: [600, 900, 1_200],
-    endAt: 1_500,
+    phases: [
+      { at: 0, sessions: sessions("tool", 1_000), automations: [] },
+      { at: 300, sessions: sessions("done", 2 * 3600_000), automations: [] },
+    ],
+    taps: [600, 900, 1_200, 1_500],
+    endAt: 1_800,
   });
 
   const done = (...numbers) => `overview:${JSON.stringify(numbers.map((number) => [`Task ${number}`, "green"]))}`;
@@ -479,9 +618,36 @@ test("leaving the overview marks only the finished sessions it showed as viewed"
     "session:{\"title\":\"Task 1\"}",
     // Tap 1: the key's own session (Task 1) counts as viewed; 240px shows 5 + "+2".
     done(2, 3, 4, 5, 6, 7, 8),
+    // Tap 2 leaves the overview for the scheduled tasks: the 5 it showed are viewed.
+    "automations:[]",
+    // Tap 3: back home.
     "session:{\"title\":\"Task 1\"}",
-    // Tap 3: the 2 that were behind "+2" are still unread.
+    // Tap 4: the 2 that were behind "+2" are still unread.
     done(7, 8),
+  ]);
+});
+
+test("keys saved with the removed Claude data source show Codex data", async () => {
+  // Older versions let each key choose between Codex and Claude Code (data.dataSource).
+  const distinct = await runOverviewHost({
+    width: 520,
+    keys: [
+      { cid: "session", data: { dataSource: "claude", sessionTitleMode: "initial" } },
+      { cid: "plan-usage", data: { dataSource: "claude" } },
+    ],
+    phases: [{
+      at: 0,
+      sessions: [{ id: "a", title: "Codex task", agoMs: 1_000, state: "tool" }],
+      quota: { limits: [{ label: "primary", usedPercent: 25, resetAt: 1778696068, windowSeconds: 18000 }] },
+    }],
+    taps: [400],
+    endAt: 800,
+  });
+
+  assert.deepEqual([...new Set(distinct)], [
+    "session:{\"title\":\"Codex task\"}",
+    "plan:[[\"5h\",75]]",
+    "overview:[[\"Codex task\",\"blue\"]]",
   ]);
 });
 

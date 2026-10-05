@@ -16,12 +16,6 @@ const {
   readCodexSessionsFromFiles,
   summarizeCodexUsage,
 } = require("../src/collectors/codex");
-const {
-  inferClaudeActivity,
-  normalizeClaudeHookActivity,
-  parseClaudeEntry,
-  summarizeClaudeUsage,
-} = require("../src/collectors/claude");
 
 test("Codex parser extracts token_count usage", () => {
   const event = parseCodexEvent({
@@ -546,7 +540,7 @@ test("Codex fallback session title inherits title from forked parent", () => {
   const sessionDir = path.join(codexHome, "sessions", "2026", "05", "13");
   fs.mkdirSync(sessionDir, { recursive: true });
   fs.writeFileSync(path.join(codexHome, "session_index.jsonl"), [
-    JSON.stringify({ id: "parent-session", thread_name: "开发 Codex Claude 用量插件", updated_at: "2026-05-13T08:00:00Z" }),
+    JSON.stringify({ id: "parent-session", thread_name: "开发 Codex 用量插件", updated_at: "2026-05-13T08:00:00Z" }),
   ].join("\n"), "utf8");
 
   const filePath = path.join(sessionDir, "rollout-2026-05-13T09-00-00-child-session.jsonl");
@@ -565,7 +559,7 @@ test("Codex fallback session title inherits title from forked parent", () => {
 
   const sessions = readCodexSessionsFromFiles([filePath], codexHome, { includeUsage: false });
 
-  assert.equal(sessions[0].title, "开发 Codex Claude 用量插件");
+  assert.equal(sessions[0].title, "开发 Codex 用量插件");
   assert.equal(sessions[0].cwd, "C:\\repo");
 });
 
@@ -635,7 +629,7 @@ test("Codex quota parser extracts nested usage percentages", () => {
       },
       weekly: {
         label: "weekly",
-        utilization: 41,
+        used_percent: 41,
         resets_at: "2026-05-20T10:00:00Z",
       },
     },
@@ -734,188 +728,6 @@ test("Codex OAuth credentials load from auth.json without exposing token", () =>
   assert.equal(credentials.available, true);
   assert.equal(credentials.accountId, "account-1");
   assert.equal(credentials.accessToken, "secret-access-token");
-});
-
-test("Claude parser extracts usage and tool use from assistant entries", () => {
-  const entry = parseClaudeEntry({
-    timestamp: "2026-05-13T08:00:00.000Z",
-    type: "assistant",
-    sessionId: "session-1",
-    cwd: "C:\\repo",
-    requestId: "req-1",
-    message: {
-      id: "msg-1",
-      model: "claude-sonnet-4-6",
-      usage: {
-        input_tokens: 100,
-        output_tokens: 20,
-        cache_creation_input_tokens: 7,
-        cache_read_input_tokens: 11,
-      },
-      content: [{ type: "tool_use", id: "tool-1", name: "Read", input: { file_path: "C:\\repo\\src\\plugin.js" } }],
-    },
-  });
-
-  assert.equal(entry.sessionId, "session-1");
-  assert.equal(entry.model, "claude-sonnet-4-6");
-  assert.deepEqual(entry.toolUses, [{ id: "tool-1", name: "Read", input: { file_path: "C:\\repo\\src\\plugin.js" } }]);
-  assert.equal(entry.usage.cacheReadInputTokens, 11);
-});
-
-test("Claude sessions derive title from first user text when session_name is absent", () => {
-  const { summarizeClaudeSessions } = require("../src/collectors/claude");
-  const sessions = summarizeClaudeSessions([
-    {
-      filePath: "C:\\Users\\tongy\\.claude\\projects\\c--Users-tongy-Develop-FlexDesigner2\\session.jsonl",
-      entry: {
-        timestamp: "2026-05-13T08:00:00.000Z",
-        type: "user",
-        sessionId: "session-1",
-        cwd: "C:\\repo",
-        message: {
-          content: [{ type: "text", text: "请帮我实现 Flexbar 插件的实时状态监控和用量展示" }],
-        },
-      },
-    },
-    {
-      filePath: "C:\\Users\\tongy\\.claude\\projects\\c--Users-tongy-Develop-FlexDesigner2\\session.jsonl",
-      entry: {
-        timestamp: "2026-05-13T08:00:01.000Z",
-        type: "assistant",
-        sessionId: "session-1",
-        message: { id: "msg-1", content: [{ type: "text", text: "ok" }] },
-      },
-    },
-  ]);
-
-  assert.equal(sessions[0].title, "请帮我实现 Flexbar 插件的实时状态监控和用量展示");
-});
-
-test("Claude session title skips IDE context messages before user request", () => {
-  const { summarizeClaudeSessions } = require("../src/collectors/claude");
-  const sessions = summarizeClaudeSessions([
-    {
-      filePath: "C:\\Users\\tongy\\.claude\\projects\\project\\session.jsonl",
-      entry: {
-        timestamp: "2026-05-13T08:00:00.000Z",
-        type: "user",
-        sessionId: "session-1",
-        message: { content: [{ type: "text", text: "The user selected the lines 10 to 12 from c:\\repo\\src\\plugin.js" }] },
-      },
-    },
-    {
-      filePath: "C:\\Users\\tongy\\.claude\\projects\\project\\session.jsonl",
-      entry: {
-        timestamp: "2026-05-13T08:00:01.000Z",
-        type: "user",
-        sessionId: "session-1",
-        message: { content: [{ type: "text", text: "详情页里的 readme 显示区滚动条不要卡死" }] },
-      },
-    },
-  ]);
-
-  assert.equal(sessions[0].title, "详情页里的 readme 显示区滚动条不要卡死");
-});
-
-test("Claude usage summary deduplicates repeated message/request pairs", () => {
-  const raw = {
-    timestamp: "2026-05-13T08:00:00.000Z",
-    type: "assistant",
-    sessionId: "session-1",
-    requestId: "req-1",
-    message: {
-      id: "msg-1",
-      usage: { input_tokens: 100, output_tokens: 20 },
-      content: [{ type: "text", text: "ok" }],
-    },
-  };
-
-  const summary = summarizeClaudeUsage([
-    { filePath: "a.jsonl", entry: raw },
-    { filePath: "a.jsonl", entry: raw },
-  ]);
-
-  assert.equal(summary.observedTokenEvents, 1);
-  assert.equal(summary.totals.inputTokens, 100);
-  assert.equal(summary.totals.outputTokens, 20);
-  assert.deepEqual(summary.recentTokenEvents.map((event) => event.totalTokens), [120]);
-});
-
-test("Claude usage summary exposes recent token events in chronological order", () => {
-  const summary = summarizeClaudeUsage([
-    {
-      filePath: "a.jsonl",
-      entry: {
-        timestamp: "2026-05-13T08:00:00.000Z",
-        type: "assistant",
-        sessionId: "session-1",
-        requestId: "req-1",
-        message: {
-          id: "msg-1",
-          usage: { input_tokens: 100, output_tokens: 20 },
-        },
-      },
-    },
-    {
-      filePath: "a.jsonl",
-      entry: {
-        timestamp: "2026-05-13T08:01:00.000Z",
-        type: "assistant",
-        sessionId: "session-1",
-        requestId: "req-2",
-        message: {
-          id: "msg-2",
-          usage: {
-            input_tokens: 60,
-            output_tokens: 30,
-            cache_creation_input_tokens: 10,
-            cache_read_input_tokens: 5,
-          },
-        },
-      },
-    },
-  ]);
-
-  assert.deepEqual(summary.recentTokenEvents.map((event) => event.totalTokens), [120, 105]);
-  assert.deepEqual(summary.recentTokenEvents.map((event) => event.timestamp), [
-    "2026-05-13T08:00:00.000Z",
-    "2026-05-13T08:01:00.000Z",
-  ]);
-});
-
-test("Claude activity prefers high-confidence bridge hook events", () => {
-  const bridge = {
-    activity: {
-      state: "tool",
-      detail: "Bash",
-      confidence: "high",
-      source: "claude_hooks",
-      lastEventAt: "2026-05-13T08:00:00.000Z",
-    },
-  };
-
-  const activity = inferClaudeActivity([], bridge, Date.parse("2026-05-13T08:00:01.000Z"));
-
-  assert.equal(activity.state, "tool");
-  assert.equal(activity.detail, "Bash");
-  assert.equal(activity.confidence, "high");
-});
-
-test("Claude notification hooks report permission prompts as approval requests", () => {
-  const activity = normalizeClaudeHookActivity({
-    hook_type: "Notification",
-    timestamp: "2026-05-13T08:00:00.000Z",
-    data: {
-      message: "Claude needs your permission to use Bash: npm install",
-      tool_name: "Bash",
-      tool_input: { command: "npm install" },
-    },
-  });
-
-  assert.equal(activity.state, "approval");
-  assert.equal(activity.detail, "Bash");
-  assert.equal(activity.action, "npm install");
-  assert.equal(activity.confidence, "high");
 });
 
 test("Codex reasoning summaries drop markdown bold markers", () => {

@@ -166,7 +166,6 @@ function latestFile(files) {
 
 module.exports = {
   latestFile,
-  pathExists,
   readJsonlByteRange,
   readJsonlFiles,
   readJsonlTail,

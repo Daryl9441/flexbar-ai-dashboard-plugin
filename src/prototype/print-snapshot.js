@@ -35,12 +35,6 @@ async function main() {
           includeUsage,
           includeQuota: includeUsage,
         },
-        claude: {
-          maxFiles: 30,
-          maxLinesPerFile: 200,
-          includeUsage,
-          includeQuota: includeUsage,
-        },
       });
       if (includeUsage) {
         usageCache = captureUsageCache(snapshot);

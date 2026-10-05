@@ -6,11 +6,13 @@ const { applyUsageCache, captureUsageCache } = require("./collectors/usageCache"
 const {
   applyOverviewTitleMode,
   applySessionTitleMode,
+  buildAutomationOverview,
   buildDashboardViewModel,
   buildSessionOverview,
   createDashboardState,
 } = require("./dashboard/viewModel");
 const {
+  renderAutomationOverviewKey,
   renderNewSessionKey,
   renderPlanUsageKey,
   renderResetTimerKey,
@@ -20,7 +22,6 @@ const {
   sessionOverviewLayout,
 } = require("./dashboard/render");
 const {
-  dataSourceFromKey,
   extractDeviceStatuses,
   extractInteractionKey,
   extractLoadedKeys,
@@ -36,6 +37,7 @@ const {
   waitAtMost,
 } = require("./dashboard/hostSafety");
 const { createKeyDrawCache } = require("./dashboard/keyDrawCache");
+const { SESSION_KEY_MODE, nextSessionKeyMode } = require("./dashboard/sessionKeyMode");
 const { DEFAULT_LANGUAGE, t } = require("./dashboard/i18n");
 const { applySkillInvocation } = require("./dashboard/skillAction");
 const {
@@ -45,11 +47,6 @@ const {
 } = require("./dashboard/newSessionAction");
 const { configureDefaultSkillKey, skillNameFromKey } = require("./dashboard/skillKey");
 const { listAiSkills } = require("./collectors/skills");
-const {
-  getClaudeBridgeStatus,
-  installClaudeBridge,
-  uninstallClaudeBridge,
-} = require("./collectors/claudeBridgeInstall");
 const {
   collectorOptionsFromConfig,
   listPathDefaults,
@@ -61,11 +58,7 @@ const {
   mergePluginConfigs,
   writePluginConfigFile,
 } = require("./collectors/pluginConfigStorage");
-const {
-  getSetupStatus,
-  installAll,
-  uninstallAll,
-} = require("./collectors/setup");
+const { getSetupStatus } = require("./collectors/setup");
 
 const SESSION_CID = "com.aspen.flexbar-ai-dashboard.session";
 const TOKEN_USAGE_CID = "com.aspen.flexbar-ai-dashboard.token-usage";
@@ -104,9 +97,10 @@ const keyDrawCache = createKeyDrawCache({
 const keyData = {};
 const dashboardKeys = new Map();
 const assignedSessionByKey = new Map();
-// AI Session keys toggled (by tap) into the all-sessions overview, and the
-// finished sessions each one is showing, marked viewed when it toggles back.
-const overviewKeys = new Set();
+// What each AI Session key shows besides its own session (absent = home): taps
+// cycle home -> overview -> automations -> home. The finished sessions a key's
+// overview is showing are marked viewed when it moves on.
+const sessionKeyModes = new Map();
 const overviewDoneSessionsByKey = new Map();
 const dashboardState = createDashboardState();
 let latestSnapshot = null;
@@ -147,18 +141,11 @@ plugin.on("ui.message", async (payload) => {
   }
 
   if (payload && payload.type === "skills") {
-    return listAiSkills({
-      source: payload.dataSource || payload.source,
-      ...collectorOptionsFromConfig(pluginConfig),
-    });
+    return listAiSkills(collectorOptionsFromConfig(pluginConfig));
   }
 
   if (payload && payload.type === "recentProjects") {
     return listRecentProjectPaths(isFreshSnapshot(latestSnapshot) ? latestSnapshot : await collectRecentProjectsSnapshot());
-  }
-
-  if (payload && payload.type === "claudeBridgeStatus") {
-    return getClaudeBridgeStatus(collectorOptionsFromConfig(pluginConfig));
   }
 
   if (payload && payload.type === "pathDefaults") {
@@ -175,40 +162,6 @@ plugin.on("ui.message", async (payload) => {
 
   if (payload && payload.type === "setupStatus") {
     return getSetupStatus(collectorOptionsFromConfig(pluginConfig));
-  }
-
-  if (payload && payload.type === "installAll") {
-    const result = installAll({
-      ...collectorOptionsFromConfig(pluginConfig),
-      overwriteStatusLine: Boolean(
-        payload.overwriteStatusLine ?? pluginConfig.overwriteStatusLine
-      ),
-    });
-    await refreshSnapshot();
-    return result;
-  }
-
-  if (payload && payload.type === "uninstallAll") {
-    const result = uninstallAll(collectorOptionsFromConfig(pluginConfig));
-    await refreshSnapshot();
-    return result;
-  }
-
-  if (payload && payload.type === "installClaudeBridge") {
-    const result = installClaudeBridge({
-      ...collectorOptionsFromConfig(pluginConfig),
-      overwriteStatusLine: Boolean(
-        payload.overwriteStatusLine ?? pluginConfig.overwriteStatusLine
-      ),
-    });
-    await refreshSnapshot();
-    return result;
-  }
-
-  if (payload && payload.type === "uninstallClaudeBridge") {
-    const result = uninstallClaudeBridge(collectorOptionsFromConfig(pluginConfig));
-    await refreshSnapshot();
-    return result;
   }
 
   logger.info("Received message from UI:", payload);
@@ -416,7 +369,7 @@ function handleKeysLoaded(payload) {
     if (item.serialNumber === serialNumber && !aliveKeys.has(uid)) {
       dashboardKeys.delete(uid);
       assignedSessionByKey.delete(uid);
-      forgetSessionOverview(uid);
+      forgetSessionKeyMode(uid);
       keyDrawCache.invalidateKey(serialNumber, uid);
     }
   }
@@ -436,7 +389,7 @@ function handleKeysRemoved(payload) {
     if (sameDevice && listedKey) {
       dashboardKeys.delete(uid);
       assignedSessionByKey.delete(uid);
-      forgetSessionOverview(uid);
+      forgetSessionKeyMode(uid);
       delete keyData[uid];
       keyDrawCache.invalidateKey(item.serialNumber, uid);
     }
@@ -450,10 +403,13 @@ async function handleKeyInteraction(payload) {
   if (!key || !DASHBOARD_CIDS.has(key.cid)) return;
 
   if (key.cid === SESSION_CID) {
-    const sessionKey = assignedSessionByKey.get(key.uid);
-    if (sessionKey) dashboardState.markViewed(sessionKey);
-    toggleSessionOverview(key.uid);
+    advanceSessionKeyMode(key.uid);
     drawDashboardKeys();
+    // Snapshots taken while no AI Session key was loaded skip the scheduled tasks:
+    // fetch them now instead of on the next tick (the key shows "loading" meanwhile).
+    if (sessionKeyModes.get(key.uid) === SESSION_KEY_MODE.AUTOMATIONS && !hasAutomationData(latestSnapshot)) {
+      refreshSnapshotInBackground();
+    }
     return;
   }
 
@@ -522,6 +478,19 @@ function hasSnapshotKeys() {
   return false;
 }
 
+function hasSessionKeys() {
+  for (const item of dashboardKeys.values()) {
+    if (item.type === "session") return true;
+  }
+  return false;
+}
+
+// A snapshot taken with automations: false has no automations field at all; one that
+// tried and failed still has one (available: false).
+function hasAutomationData(snapshot) {
+  return Boolean(snapshot && snapshot.automations);
+}
+
 // latestSnapshot stops updating once only New Codex Session keys remain.
 function isFreshSnapshot(snapshot) {
   const collectedAt = Date.parse(snapshot && snapshot.collectedAt);
@@ -532,7 +501,7 @@ async function collectRecentProjectsSnapshot() {
   try {
     return await collectAiSnapshot({
       codex: { ...collectorOptionsFromConfig(pluginConfig), appServerTimeoutMs: 2_500, includeUsage: false, includeQuota: false },
-      claude: { ...collectorOptionsFromConfig(pluginConfig), maxFiles: 1, maxLinesPerFile: 1, includeUsage: false, includeQuota: false },
+      automations: false,
     });
   } catch (error) {
     logger.warn("Failed to collect recent Codex projects:", error);
@@ -555,21 +524,15 @@ async function refreshSnapshot() {
     await waitForHostPluginConfigSync();
     const now = Date.now();
     const includeUsage = !usageCache || now - lastUsageAt >= USAGE_INTERVAL_MS;
-    const collectorOptions = collectorOptionsFromConfig(pluginConfig);
     latestSnapshot = await collectAiSnapshot({
       codex: {
-        ...collectorOptions,
+        ...collectorOptionsFromConfig(pluginConfig),
         appServerTimeoutMs: 2_500,
         includeUsage,
         includeQuota: includeUsage,
       },
-      claude: {
-        ...collectorOptions,
-        maxFiles: 30,
-        maxLinesPerFile: 200,
-        includeUsage,
-        includeQuota: includeUsage,
-      },
+      // Only AI Session keys show scheduled tasks; nobody else needs the app's database read.
+      automations: hasSessionKeys(),
     });
     if (includeUsage) {
       usageCache = captureUsageCache(latestSnapshot);
@@ -611,37 +574,39 @@ function drawAllDashboardKeys() {
   }
 
   const sessionItems = Array.from(dashboardKeys.values()).filter((item) => item.type === "session");
-  const sessionIndexes = { codex: 0, claude: 0 };
-  const sessionModels = {
-    codex: buildDashboardViewModel(snapshotForDataSource(latestSnapshot, "codex"), dashboardState, {
-      language: currentLanguage,
-      sessionSlots: sessionItems.filter((item) => dataSourceFromKey(item.key) === "codex").length,
-    }),
-    claude: buildDashboardViewModel(snapshotForDataSource(latestSnapshot, "claude"), dashboardState, {
-      language: currentLanguage,
-      sessionSlots: sessionItems.filter((item) => dataSourceFromKey(item.key) === "claude").length,
-    }),
-  };
+  const model = buildDashboardViewModel(latestSnapshot, dashboardState, {
+    language: currentLanguage,
+    sessionSlots: sessionItems.length,
+  });
 
-  // Built for every source with session keys so finished sessions are tracked
+  // Built whenever a session key is loaded so finished sessions are tracked
   // even while no key shows the overview.
-  const overviews = {};
-  for (const source of new Set(sessionItems.map((item) => dataSourceFromKey(item.key)))) {
-    overviews[source] = buildSessionOverview(snapshotForDataSource(latestSnapshot, source), dashboardState, {
-      language: currentLanguage,
-    });
-  }
+  const overview = sessionItems.length > 0
+    ? buildSessionOverview(latestSnapshot, dashboardState, { language: currentLanguage })
+    : null;
 
+  let automations = null;
+  let sessionIndex = 0;
   sessionItems.forEach((item) => {
-    const source = dataSourceFromKey(item.key);
-    if (overviewKeys.has(item.key.uid)) {
-      drawSessionOverviewKey(item, overviews[source]);
+    // Keys showing the overview or the scheduled tasks take no session slot.
+    const mode = sessionKeyModes.get(item.key.uid);
+    if (mode === SESSION_KEY_MODE.OVERVIEW) {
+      drawSessionOverviewKey(item, overview);
       return;
     }
-    const index = sessionIndexes[source]++;
-    const model = sessionModels[source];
+    if (mode === SESSION_KEY_MODE.AUTOMATIONS) {
+      if (!hasAutomationData(latestSnapshot)) {
+        // Not collected yet (not unavailable): see handleKeyInteraction.
+        assignedSessionByKey.delete(item.key.uid);
+        drawLoadingKey(item.serialNumber, item.key);
+        return;
+      }
+      automations = automations || buildAutomationOverview(latestSnapshot, { language: currentLanguage });
+      drawAutomationOverviewKey(item, automations);
+      return;
+    }
     const view = applySessionTitleMode(
-      model.sessions[index] || emptySessionView(),
+      model.sessions[sessionIndex++] || emptySessionView(),
       sessionTitleModeFromKey(item.key)
     );
     if (view.sessionKey) {
@@ -662,11 +627,6 @@ function drawAllDashboardKeys() {
       continue;
     }
 
-    const model = buildDashboardViewModel(
-      snapshotForDataSource(latestSnapshot, dataSourceFromKey(item.key)),
-      dashboardState,
-      { language: currentLanguage, sessionSlots: 0 }
-    );
     if (item.type === "token") {
       drawImageKey(
         item.serialNumber,
@@ -688,19 +648,31 @@ function drawDefaultSkillKey(serialNumber, key) {
   keyDrawCache.drawKey(serialNumber, key, "draw");
 }
 
-function toggleSessionOverview(uid) {
-  if (overviewKeys.delete(uid)) {
+// One tap on an AI Session key: home -> overview -> automations -> home. Leaving
+// home marks the key's own session viewed; leaving the overview marks the finished
+// sessions it showed viewed (those hidden behind "+N" stay unread).
+function advanceSessionKeyMode(uid) {
+  const mode = sessionKeyModes.get(uid) || SESSION_KEY_MODE.HOME;
+  if (mode === SESSION_KEY_MODE.HOME) {
+    const sessionKey = assignedSessionByKey.get(uid);
+    if (sessionKey) dashboardState.markViewed(sessionKey);
+  } else if (mode === SESSION_KEY_MODE.OVERVIEW) {
     for (const sessionKey of overviewDoneSessionsByKey.get(uid) || []) {
       dashboardState.markViewed(sessionKey);
     }
     overviewDoneSessionsByKey.delete(uid);
-    return;
   }
-  overviewKeys.add(uid);
+
+  const next = nextSessionKeyMode(mode);
+  if (next === SESSION_KEY_MODE.HOME) {
+    sessionKeyModes.delete(uid);
+  } else {
+    sessionKeyModes.set(uid, next);
+  }
 }
 
-function forgetSessionOverview(uid) {
-  overviewKeys.delete(uid);
+function forgetSessionKeyMode(uid) {
+  sessionKeyModes.delete(uid);
   overviewDoneSessionsByKey.delete(uid);
 }
 
@@ -718,6 +690,18 @@ function drawSessionOverviewKey(item, overview) {
 
 function sessionOverviewFallbackTitle(view) {
   return `${view.runningCount} ${t(currentLanguage, "overviewRunning")} · ${view.doneCount} ${t(currentLanguage, "overviewDone")}`;
+}
+
+function drawAutomationOverviewKey(item, view) {
+  assignedSessionByKey.delete(item.key.uid);
+  drawImageKey(item.serialNumber, item.key, view, renderAutomationOverviewKey, automationOverviewFallbackTitle(view));
+}
+
+function automationOverviewFallbackTitle(view) {
+  if (view.total === 0) {
+    return t(currentLanguage, view.available ? "noScheduledTasks" : "scheduledTasksUnavailable");
+  }
+  return t(currentLanguage, view.total === 1 ? "scheduledTaskCountOne" : "scheduledTasksCount").replace("{n}", String(view.total));
 }
 
 function drawNewSessionKey(serialNumber, key) {
@@ -811,29 +795,6 @@ function emptySessionView() {
 
 function sessionFallbackTitle(view) {
   return `${view.title || "Session"} ${view.tokenLabel || ""}`.trim();
-}
-
-function snapshotForDataSource(snapshot, source) {
-  const providers = snapshot && snapshot.providers || {};
-  const dataSource = source === "claude" ? "claude" : "codex";
-  return {
-    ...snapshot,
-    providers: {
-      codex: dataSource === "codex" ? providers.codex : emptyProvider("codex"),
-      claude: dataSource === "claude" ? providers.claude : emptyProvider("claude"),
-    },
-  };
-}
-
-function emptyProvider(provider) {
-  return {
-    provider,
-    sessions: [],
-    activeSession: null,
-    activity: { state: "idle" },
-    usage: null,
-    quota: null,
-  };
 }
 
 function skillFallbackTitle(key) {

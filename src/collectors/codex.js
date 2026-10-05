@@ -69,7 +69,7 @@ function extractCodexUsage(payload) {
 
   return {
     inputTokens: numberFrom(usage.input_tokens),
-    cachedInputTokens: numberFrom(usage.cached_input_tokens ?? usage.cache_read_input_tokens),
+    cachedInputTokens: numberFrom(usage.cached_input_tokens),
     outputTokens: numberFrom(usage.output_tokens),
     reasoningOutputTokens: numberFrom(usage.reasoning_output_tokens),
     totalTokens: numberFrom(usage.total_tokens),
@@ -1125,7 +1125,7 @@ function collectQuotaLimits(raw) {
   function visit(value, pathParts) {
     if (!value || typeof value !== "object") return;
 
-    const usedPercent = numberOrNull(value.used_percent ?? value.usedPercent ?? value.utilization);
+    const usedPercent = numberOrNull(value.used_percent ?? value.usedPercent);
     const resetAt = value.reset_at || value.resetAt || value.resets_at || value.resetsAt || null;
     if (usedPercent !== null || resetAt) {
       const label = value.label || value.display_name || value.displayName || value.name || labelFromQuotaPath(pathParts);

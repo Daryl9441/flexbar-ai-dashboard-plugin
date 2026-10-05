@@ -73,18 +73,6 @@ test("monitor formatter prints session title, status, and current action only", 
         fileStats: { sessionFiles: 3 },
         source: { latestSessionFile: "latest.jsonl", appServer: { available: true, errors: [] } },
       },
-      claude: {
-        activity: { state: "idle", detail: "no recent event", confidence: "medium", lastEventAt: "2026-05-12T08:00:00.000Z" },
-        sessions: [
-          { id: "claude-1", title: null, project: "project-a", cwd: "C:\\project-a", updatedAt: "2026-05-12T08:00:00.000Z", source: "claude_jsonl", usage: { totals: { inputTokens: 10, outputTokens: 20, cacheCreationInputTokens: 30, cacheReadInputTokens: 40 } } },
-          { id: "claude-2", title: "Named session", cwd: "C:\\project-b", updatedAt: "2026-05-12T07:00:00.000Z", source: "claude_statusline" },
-          { id: "claude-archived", title: "Old Claude", archived: true },
-        ],
-        usage: { totals: { inputTokens: 10, outputTokens: 20, cacheCreationInputTokens: 30, cacheReadInputTokens: 40 }, observedTokenEvents: 1 },
-        quota: null,
-        fileStats: { projectFiles: 5, scannedFiles: 2 },
-        source: { bridgeAvailable: false, latestSessionFile: "claude.jsonl" },
-      },
     },
   });
 
@@ -96,39 +84,10 @@ test("monitor formatter prints session title, status, and current action only", 
   assert.match(output, /运行中/);
   assert.match(output, /正在运行命令: node --test/);
   assert.match(output, /tokens 1\.2k/);
-  assert.match(output, /Claude/);
-  assert.match(output, /总用量 100/);
-  assert.match(output, /订阅用量 unavailable/);
-  assert.match(output, /project-a/);
-  assert.match(output, /tokens 100/);
-  assert.match(output, /Named session/);
   assert.doesNotMatch(output, /Archived work/);
-  assert.doesNotMatch(output, /Old Claude/);
   assert.doesNotMatch(output, /Usage:/);
   assert.doesNotMatch(output, /Quota:/);
   assert.doesNotMatch(output, /Source:/);
-});
-
-test("monitor formatter displays Claude subscription percentages from statusLine quota", () => {
-  const output = formatMonitorSnapshot({
-    collectedAt: "2026-05-13T09:00:00.000Z",
-    providers: {
-      codex: { sessions: [], quota: null },
-      claude: {
-        sessions: [],
-        quota: {
-          source: "claude_statusline",
-          rateLimits: {
-            five_hour: { used_percentage: 67, resets_at: "2026-05-13T10:00:00Z" },
-            seven_day: { used_percentage: 31, resets_at: "2026-05-20T10:00:00Z" },
-          },
-        },
-      },
-    },
-  });
-
-  assert.match(output, /Claude/);
-  assert.match(output, /订阅用量 5小时 67% reset 2026-05-13T10:00:00Z; 每周 31% reset 2026-05-20T10:00:00Z/);
 });
 
 test("monitor formatter deduplicates Codex quota and formats reset epochs", () => {
@@ -146,7 +105,6 @@ test("monitor formatter deduplicates Codex quota and formats reset epochs", () =
           ],
         },
       },
-      claude: { sessions: [], quota: null },
     },
   });
 
@@ -166,16 +124,8 @@ test("monitor formatter maps common tool activity to Chinese progress text", () 
         activity: { state: "thinking", detail: "reasoning", action: "planning files" },
         sessions: [
           { id: "s1", title: "Thinking task", activity: { state: "thinking", detail: "reasoning" } },
-          { id: "s2", title: "Read task", activity: { state: "tool", detail: "Read", action: "src/plugin.js" } },
-          { id: "s3", title: "Edit task", activity: { state: "tool", detail: "Edit", action: "src/plugin.js" } },
-        ],
-      },
-      claude: {
-        activeSession: { id: "c1" },
-        activity: { state: "tool", detail: "Grep", action: "collectCodex in src" },
-        sessions: [
-          { id: "c1", title: "Search task", activity: { state: "tool", detail: "Grep", action: "collectCodex in src" } },
-          { id: "c2", title: "Done task" },
+          { id: "s2", title: "Shell task", activity: { state: "tool", detail: "shell_command", action: "npm test" } },
+          { id: "s3", title: "Done task" },
         ],
       },
     },
@@ -184,10 +134,19 @@ test("monitor formatter maps common tool activity to Chinese progress text", () 
   const output = formatMonitorSnapshot(snapshot);
 
   assert.match(output, /Thinking task \| 运行中 \| 正在思考/);
-  assert.match(output, /Read task \| 已完成 \| 已完成/);
-  assert.match(output, /Edit task \| 已完成 \| 已完成/);
-  assert.match(output, /Search task \| 运行中 \| 正在搜索: collectCodex in src/);
+  assert.match(output, /Shell task \| 已完成 \| 已完成/);
   assert.match(output, /Done task \| 已完成 \| 已完成/);
+
+  const searching = formatMonitorSnapshot({
+    collectedAt: "2026-05-13T09:00:00.000Z",
+    providers: {
+      codex: {
+        activeSession: { id: "s1" },
+        sessions: [{ id: "s1", title: "Search task", activity: { state: "tool", detail: "web_search", action: "codex app-server" } }],
+      },
+    },
+  });
+  assert.match(searching, /Search task \| 运行中 \| 正在搜索: codex app-server/);
 });
 
 test("monitor formatter renders planning activity as planning", () => {
@@ -204,7 +163,6 @@ test("monitor formatter renders planning activity as planning", () => {
           },
         ],
       },
-      claude: { sessions: [] },
     },
   });
 
@@ -226,7 +184,6 @@ test("monitor formatter renders completed tool output with tool context", () => 
           },
         ],
       },
-      claude: { sessions: [] },
     },
   });
 
@@ -250,11 +207,16 @@ test("monitor formatter labels unknown tools and MCP tools explicitly", () => {
           },
         ],
       },
-      claude: {
-        activeSession: { id: "c1" },
+    },
+  });
+  const custom = formatMonitorSnapshot({
+    collectedAt: "2026-05-13T09:00:00.000Z",
+    providers: {
+      codex: {
+        activeSession: { id: "s1" },
         sessions: [
           {
-            id: "c1",
+            id: "s1",
             title: "Tool task",
             activity: { state: "tool", detail: "custom_tool", action: "do work" },
           },
@@ -264,7 +226,7 @@ test("monitor formatter labels unknown tools and MCP tools explicitly", () => {
   });
 
   assert.match(output, /\u6b63\u5728\u4f7f\u7528 MCP mcp__node_repl__js: inspect state/);
-  assert.match(output, /\u6b63\u5728\u4f7f\u7528\u5de5\u5177 custom_tool: do work/);
+  assert.match(custom, /\u6b63\u5728\u4f7f\u7528\u5de5\u5177 custom_tool: do work/);
 });
 
 test("monitor formatter renders approval activity as waiting for approval", () => {
@@ -281,7 +243,6 @@ test("monitor formatter renders approval activity as waiting for approval", () =
           },
         ],
       },
-      claude: { sessions: [] },
     },
   });
 

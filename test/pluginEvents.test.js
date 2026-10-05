@@ -4,7 +4,6 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const {
-  dataSourceFromKey,
   extractInteractionKey,
   extractLoadedKeys,
   languageFromPayload,
@@ -43,16 +42,6 @@ test("plugin event adapter ignores malformed lifecycle payloads", () => {
   assert.deepEqual(extractLoadedKeys(null), { serialNumber: null, keys: [] });
   assert.deepEqual(extractLoadedKeys({ serialNumber: "s1" }), { serialNumber: "s1", keys: [] });
   assert.equal(extractInteractionKey({ serialNumber: "s1", data: {} }).key, null);
-});
-
-test("plugin event adapter reads key data source with codex default", () => {
-  assert.equal(dataSourceFromKey({ data: { dataSource: "claude" } }), "claude");
-  assert.equal(dataSourceFromKey({ config: { dataSource: "claude" } }), "claude");
-  assert.equal(dataSourceFromKey({ data: { config: { dataSource: "claude" } } }), "claude");
-  assert.equal(dataSourceFromKey({ dataSource: "claude", data: { dataSource: "codex" } }), "claude");
-  assert.equal(dataSourceFromKey({ data: { dataSource: "codex" } }), "codex");
-  assert.equal(dataSourceFromKey({ data: { dataSource: "unknown" } }), "codex");
-  assert.equal(dataSourceFromKey(null), "codex");
 });
 
 test("plugin event adapter reads session title mode with initial default", () => {

@@ -52,15 +52,6 @@ test("mergePluginConfigs keeps disk overrides when host config is empty", () => 
   assert.equal(merged.pathOverrides.CODEX_HOME, "/disk/codex");
 });
 
-test("mergePluginConfigs keeps overwriteStatusLine when host config omits it", () => {
-  const merged = mergePluginConfigs(
-    { overwriteStatusLine: true },
-    { pathOverrides: { CODEX_HOME: "" } }
-  );
-
-  assert.equal(merged.overwriteStatusLine, true);
-});
-
 test("mergePluginConfigs applies non-empty host overrides on top of disk config", () => {
   const merged = mergePluginConfigs(
     { pathOverrides: { CODEX_HOME: "/disk/codex" } },
@@ -68,4 +59,31 @@ test("mergePluginConfigs applies non-empty host overrides on top of disk config"
   );
 
   assert.equal(merged.pathOverrides.CODEX_HOME, "/host/codex");
+});
+
+test("a config.json saved by an older version loads without its removed settings", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "flexbar-plugin-legacy-"));
+  const codexHome = path.join(tempDir, "codex");
+  fs.mkdirSync(codexHome, { recursive: true });
+  // Written as-is (not through writePluginConfigFile), like an older version did.
+  fs.writeFileSync(path.join(tempDir, "config.json"), JSON.stringify({
+    overwriteStatusLine: true,
+    pathOverrides: {
+      CODEX_HOME: codexHome,
+      CLAUDE_CONFIG_DIR: path.join(tempDir, "claude-config"),
+      FLEXBAR_AI_CLAUDE_EVENTS: path.join(tempDir, "events.jsonl"),
+    },
+  }), "utf8");
+
+  const { config, warning } = loadPluginConfigState(tempDir);
+  assert.equal(warning, null);
+  assert.deepEqual(config, { pathOverrides: { CODEX_HOME: codexHome } });
+  assert.equal(getSetupStatus(collectorOptionsFromConfig(config)).codex.codexHome, codexHome);
+
+  // The host may still push the old settings; merging drops them too.
+  const merged = mergePluginConfigs(config, { config: { overwriteStatusLine: false, pathOverrides: { CLAUDE_CONFIG_DIR: "/x" } } });
+  assert.deepEqual(merged, { pathOverrides: { CODEX_HOME: codexHome } });
+
+  writePluginConfigFile(tempDir, merged);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(tempDir, "config.json"), "utf8")), merged);
 });

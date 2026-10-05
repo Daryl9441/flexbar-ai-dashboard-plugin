@@ -1,7 +1,6 @@
 # Project instructions for AI agents
 
-FlexDesigner plugin that shows Codex and Claude Code activity on Flexbar keys. README.md covers features, setup and
-release packaging.
+FlexDesigner plugin that shows Codex activity on Flexbar keys. README.md covers features, setup and release packaging.
 
 ## Commands
 

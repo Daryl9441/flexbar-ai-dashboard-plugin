@@ -1,16 +1,27 @@
 "use strict";
 
-const { namedQuotaWindowSeconds, quotaWindowLabel } = require("../dashboard/viewModel");
+const { buildAutomationOverview, namedQuotaWindowSeconds, quotaWindowLabel } = require("../dashboard/viewModel");
 
-function formatMonitorSnapshot(snapshot) {
+function formatMonitorSnapshot(snapshot, options = {}) {
   const lines = [];
   lines.push("AI session monitor");
   lines.push(`Collected: ${snapshot.collectedAt}`);
   lines.push("");
   lines.push(formatProvider("Codex", snapshot.providers.codex));
-  lines.push("");
-  lines.push(formatProvider("Claude", snapshot.providers.claude));
+  if (snapshot.automations) lines.push(formatAutomations(snapshot, options.now));
   return lines.join("\n");
+}
+
+// One line: how many scheduled tasks there are and which one runs next.
+function formatAutomations(snapshot, now) {
+  const overview = buildAutomationOverview(snapshot, { language: "zh", now, limit: 1 });
+  if (overview.items.length === 0) {
+    return overview.available
+      ? "  定时任务 0"
+      : `  定时任务 不可用${overview.reason ? ` (${overview.reason})` : ""}`;
+  }
+  const [next] = overview.items;
+  return `  定时任务 ${overview.total} | 下次 ${next.title} | ${next.timeLabel}`;
 }
 
 function formatProvider(label, provider) {
@@ -89,16 +100,7 @@ function formatToolAction(tool, action) {
 
   switch (tool) {
     case "shell_command":
-    case "Bash":
       return `正在运行命令${detail}`;
-    case "Read":
-      return `正在读取${detail}`;
-    case "Edit":
-    case "MultiEdit":
-    case "Write":
-      return `正在编辑${detail}`;
-    case "Grep":
-    case "Glob":
     case "web_search":
     case "web_search_call":
       return `正在搜索${detail}`;
@@ -113,16 +115,7 @@ function formatCompletedToolAction(tool, action) {
 
   switch (tool) {
     case "shell_command":
-    case "Bash":
       return `刚完成运行命令${detail}`;
-    case "Read":
-      return `刚完成读取${detail}`;
-    case "Edit":
-    case "MultiEdit":
-    case "Write":
-      return `刚完成编辑${detail}`;
-    case "Grep":
-    case "Glob":
     case "web_search":
     case "web_search_call":
       return `刚完成搜索${detail}`;
@@ -243,30 +236,13 @@ function formatResetAt(value) {
 }
 
 function extractQuotaLimits(quota) {
-  if (!quota) return [];
-  if (Array.isArray(quota.limits)) {
-    return quota.limits.map((limit) => ({
-      label: limit.label || limit.id || limit.window,
-      usedPercent: limit.usedPercent,
-      resetAt: limit.resetAt,
-      windowSeconds: Number(limit.windowSeconds) > 0 ? Number(limit.windowSeconds) : namedQuotaWindowSeconds(limit.label || limit.id || limit.window),
-    })).filter((limit) => limit.usedPercent !== undefined || limit.resetAt);
-  }
-
-  const rateLimits = quota.rateLimits || quota.rate_limits;
-  if (rateLimits && typeof rateLimits === "object") {
-    return Object.entries(rateLimits).map(([key, value]) => {
-      if (!value || typeof value !== "object") return null;
-      return {
-        label: key,
-        usedPercent: value.used_percentage ?? value.usedPercent ?? value.utilization,
-        resetAt: value.resets_at ?? value.reset_at ?? value.resetAt,
-        windowSeconds: namedQuotaWindowSeconds(key),
-      };
-    }).filter(Boolean).filter((limit) => limit.usedPercent !== undefined || limit.resetAt);
-  }
-
-  return [];
+  if (!quota || !Array.isArray(quota.limits)) return [];
+  return quota.limits.map((limit) => ({
+    label: limit.label || limit.id || limit.window,
+    usedPercent: limit.usedPercent,
+    resetAt: limit.resetAt,
+    windowSeconds: Number(limit.windowSeconds) > 0 ? Number(limit.windowSeconds) : namedQuotaWindowSeconds(limit.label || limit.id || limit.window),
+  })).filter((limit) => limit.usedPercent !== undefined || limit.resetAt);
 }
 
 function tokenTotal(usage) {

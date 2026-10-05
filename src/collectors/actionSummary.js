@@ -8,14 +8,8 @@ function summarizeToolAction(toolName, rawInput) {
 
   if (toolName === "apply_patch") {
     summary = summarizePatchFiles(pick(input, ["value", "patch"]) || stringifyShort(input));
-  } else if (toolName === "shell_command" || toolName === "Bash") {
+  } else if (toolName === "shell_command") {
     summary = pick(input, ["command", "cmd", "description"]) || stringifyShort(input);
-  } else if (toolName === "Read" || toolName === "Edit" || toolName === "Write" || toolName === "MultiEdit") {
-    summary = pick(input, ["file_path", "path", "filePath"]) || stringifyShort(input);
-  } else if (toolName === "Grep" || toolName === "Glob") {
-    const pattern = pick(input, ["pattern", "glob", "query"]);
-    const root = pick(input, ["path", "cwd"]);
-    summary = [pattern, root].filter(Boolean).join(" in ") || stringifyShort(input);
   } else if (toolName === "web_search_call" || toolName === "web_search") {
     summary = pick(input, ["query", "q"]) || stringifyShort(input);
   } else {
@@ -47,7 +41,8 @@ function summarizeReasoning(entry) {
   ];
 
   for (const candidate of candidates) {
-    const text = stringifyReasoningCandidate(candidate);
+    // Codex reasoning summaries start with a "**Heading**" line; show it without markers.
+    const text = stringifyReasoningCandidate(candidate).replace(/\*\*([^*]+)\*\*/g, "$1").trim();
     if (text) return truncate(redactSecrets(text));
   }
 

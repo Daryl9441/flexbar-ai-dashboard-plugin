@@ -29,6 +29,43 @@ function extractInteractionKey(payload) {
   };
 }
 
+/**
+ * Normalizes `device.status` payloads. FlexDesigner sends one array per event;
+ * an unplug produces two events and a replug one:
+ *   [{ serialNumber, status: "disconnected", _removeDevice: false, _sendWebEvent: false }]
+ *   [{ serialNumber, status: "disconnected", _removeDevice: true, _sendWebEvent: true }]
+ *   [{ serialNumber, status: "connected", deviceData, _removeDevice: true, _sendWebEvent: true }]
+ * Returns [{ serialNumber, status: "connected" | "disconnected" }] and drops
+ * entries with an unknown status or no serial number.
+ */
+function extractDeviceStatuses(payload) {
+  let items = Array.isArray(payload)
+    ? payload
+    : firstArray(payload && payload.devices, payload && payload.data && payload.data.devices);
+  if (!Array.isArray(payload) && items.length === 0 && payload && typeof payload === "object") {
+    items = [payload];
+  }
+
+  const statuses = [];
+  for (const item of items) {
+    const serialNumber = item && typeof item === "object" ? item.serialNumber : null;
+    const status = deviceConnectionStatus(item);
+    if (serialNumber && status) statuses.push({ serialNumber, status });
+  }
+  return statuses;
+}
+
+function deviceConnectionStatus(item) {
+  if (!item || typeof item !== "object") return null;
+  // An explicit status always wins: every real reconnect event carries
+  // `_removeDevice: true` next to `status: "connected"`.
+  const status = String(item.status || "").trim().toLowerCase();
+  if (status === "connected" || status === "disconnected") return status;
+  // Only a payload without a usable status falls back to the removal flag.
+  if (item._removeDevice === true) return "disconnected";
+  return null;
+}
+
 function sessionTitleModeFromKey(key) {
   const data = keyConfigFromKey(key);
   const value = data.sessionTitleMode || data.titleMode;
@@ -40,9 +77,13 @@ function tokenDisplayModeFromKey(key) {
   return data.tokenDisplayMode === "recentChart" ? "recentChart" : "summary";
 }
 
-function dataSourceFromKey(key) {
+function newSessionConfigFromKey(key) {
   const data = keyConfigFromKey(key);
-  return data.dataSource === "claude" ? "claude" : "codex";
+  return {
+    projectPath: typeof data.projectPath === "string" ? data.projectPath.trim() : "",
+    prompt: typeof data.prompt === "string" ? data.prompt : "",
+    mode: typeof data.mode === "string" ? data.mode : "",
+  };
 }
 
 function firstArray(...values) {
@@ -75,7 +116,7 @@ function rootConfigFromKey(key) {
   if (!key || typeof key !== "object" || Array.isArray(key)) return {};
 
   const config = {};
-  for (const name of ["dataSource", "sessionTitleMode", "titleMode", "tokenDisplayMode"]) {
+  for (const name of ["sessionTitleMode", "titleMode", "tokenDisplayMode", "mode", "projectPath", "prompt"]) {
     if (Object.prototype.hasOwnProperty.call(key, name)) {
       config[name] = key[name];
     }
@@ -84,10 +125,11 @@ function rootConfigFromKey(key) {
 }
 
 module.exports = {
-  dataSourceFromKey,
+  extractDeviceStatuses,
   extractInteractionKey,
   extractLoadedKeys,
   languageFromPayload,
+  newSessionConfigFromKey,
   sessionTitleModeFromKey,
   tokenDisplayModeFromKey,
 };

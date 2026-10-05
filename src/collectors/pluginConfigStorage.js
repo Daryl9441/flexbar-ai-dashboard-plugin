@@ -2,11 +2,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
-const {
-  normalizePluginConfig,
-  readPathOverrides,
-  unwrapPluginConfigPayload,
-} = require("./pathOverrides");
+const { normalizePluginConfig, readPathOverrides } = require("./pathOverrides");
 
 function pluginConfigPath(pluginDirectory) {
   if (!pluginDirectory) return null;
@@ -39,15 +35,8 @@ function writePluginConfigFile(pluginDirectory, config) {
 }
 
 function mergePluginConfigs(baseConfig, nextConfig) {
-  const base = normalizePluginConfig(baseConfig);
-  const next = normalizePluginConfig(nextConfig);
-  const rawNext = unwrapPluginConfigPayload(nextConfig);
-  const hasNextOverwriteStatusLine = Object.prototype.hasOwnProperty.call(
-    rawNext,
-    "overwriteStatusLine"
-  );
-  const baseOverrides = readPathOverrides(base);
-  const nextOverrides = readPathOverrides(next);
+  const baseOverrides = readPathOverrides(normalizePluginConfig(baseConfig));
+  const nextOverrides = readPathOverrides(normalizePluginConfig(nextConfig));
   const pathOverrides = { ...baseOverrides };
 
   for (const [key, value] of Object.entries(nextOverrides)) {
@@ -56,12 +45,7 @@ function mergePluginConfigs(baseConfig, nextConfig) {
     }
   }
 
-  return normalizePluginConfig({
-    overwriteStatusLine: hasNextOverwriteStatusLine
-      ? Boolean(rawNext.overwriteStatusLine)
-      : base.overwriteStatusLine,
-    pathOverrides,
-  });
+  return normalizePluginConfig({ pathOverrides });
 }
 
 function loadPluginConfigState(pluginDirectory) {

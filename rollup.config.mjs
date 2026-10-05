@@ -5,9 +5,15 @@ import fs from "node:fs";
 import path from "node:path";
 import url from "node:url";
 import json from "@rollup/plugin-json";
+import nativeCanvas from "./scripts/native-canvas.cjs";
 
 const isWatching = !!process.env.ROLLUP_WATCH;
+const projectDir = path.dirname(url.fileURLToPath(import.meta.url));
 const flexPlugin = "com.aspen.flexbar-ai-dashboard.plugin";
+// FLEX_TARGET picks the @napi-rs/canvas binaries bundled into the plugin backend,
+// e.g. "darwin-arm64,darwin-x64", "win32-x64" or "all"; empty means the build host.
+// Resolved up front so a typo fails before bundling starts.
+const canvasTargets = nativeCanvas.resolveCanvasTargets(process.env.FLEX_TARGET);
 
 function listUiVueFiles(uiDir) {
   if (!fs.existsSync(uiDir)) return [];
@@ -75,9 +81,23 @@ const config = {
     {
       name: "copy-native-canvas",
       generateBundle() {
-        copyPackageToBackend("@napi-rs/canvas");
-        const nativePackage = nativeCanvasPackage();
-        if (nativePackage) copyPackageToBackend(nativePackage);
+        let bundled;
+        try {
+          // Unchanged packages are not rewritten, so watch rebuilds leave the
+          // binary FlexDesigner has loaded (and Windows keeps locked) alone.
+          bundled = nativeCanvas.bundleNativeCanvas({
+            projectDir,
+            pluginDir: path.join(projectDir, flexPlugin),
+            targets: canvasTargets,
+            log: (message) => this.info(message),
+            warn: (message) => this.warn(message),
+          });
+        } catch (error) {
+          this.error(`Could not bundle the @napi-rs/canvas native binary: ${error.message}`);
+        }
+        for (const item of bundled) {
+          this.info(`bundled ${item.name}@${item.version} for ${item.target} from ${item.source} (${nativeCanvas.describeCopy(item.copy)})`);
+        }
       }
     },
     {
@@ -89,41 +109,6 @@ const config = {
   ],
   external: id => id.endsWith('.node')
 };
-
-function copyPackageToBackend(packageName) {
-  const source = path.join("node_modules", ...packageName.split("/"));
-  if (!fs.existsSync(source)) return;
-
-  const destination = path.join(flexPlugin, "backend", "node_modules", ...packageName.split("/"));
-  const canReuseLockedCanvasPackage = isCanvasPackage(packageName) && fs.existsSync(destination);
-  try {
-    fs.rmSync(destination, { recursive: true, force: true });
-  } catch (error) {
-    if (canReuseLockedCanvasPackage && error && error.code === "EPERM") return;
-    throw error;
-  }
-  fs.mkdirSync(path.dirname(destination), { recursive: true });
-  fs.cpSync(source, destination, { recursive: true });
-}
-
-function isCanvasPackage(packageName) {
-  return /^@napi-rs\/canvas(?:-|$)/.test(packageName);
-}
-
-function nativeCanvasPackage() {
-  const platform = process.platform;
-  const arch = process.arch;
-
-  if (platform === "win32" && arch === "x64") return "@napi-rs/canvas-win32-x64-msvc";
-  if (platform === "darwin" && arch === "x64") return "@napi-rs/canvas-darwin-x64";
-  if (platform === "darwin" && arch === "arm64") return "@napi-rs/canvas-darwin-arm64";
-  if (platform === "linux" && arch === "x64") return "@napi-rs/canvas-linux-x64-gnu";
-  if (platform === "linux" && arch === "arm64") return "@napi-rs/canvas-linux-arm64-gnu";
-  if (platform === "linux" && arch === "arm") return "@napi-rs/canvas-linux-arm-gnueabihf";
-  if (platform === "android" && arch === "arm64") return "@napi-rs/canvas-android-arm64";
-
-  return null;
-}
 
 function patchFlexdesignerTransportRetry() {
   return {

@@ -2,16 +2,15 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
-const { resolveCodexHome, resolveHome } = require("./paths");
+const { resolveCodexHome } = require("./paths");
 
 function listAiSkills(options = {}) {
-  const source = options.source === "claude" ? "claude" : "codex";
-  const roots = options.roots || skillRoots(source, options.env || process.env);
+  const roots = options.roots || skillRoots(options.env || process.env);
   const byName = new Map();
 
   for (const root of roots) {
     for (const filePath of walkSkillFiles(root)) {
-      const skill = readSkillFile(filePath, source, root);
+      const skill = readSkillFile(filePath, root);
       if (skill && !byName.has(skill.name)) byName.set(skill.name, skill);
     }
   }
@@ -19,25 +18,12 @@ function listAiSkills(options = {}) {
   return Array.from(byName.values()).sort((a, b) => a.name.localeCompare(b.name));
 }
 
-function skillRoots(source, env = process.env) {
-  if (source === "claude") return claudeSkillRoots(env);
-
+function skillRoots(env = process.env) {
   const codexHome = resolveCodexHome(env);
   return [
     path.join(codexHome, "skills"),
     path.join(codexHome, "plugins", "cache"),
   ];
-}
-
-function claudeSkillRoots(env = process.env) {
-  const home = resolveHome(env);
-  if (env.CLAUDE_CONFIG_DIR) {
-    return env.CLAUDE_CONFIG_DIR.split(",")
-      .map((root) => root.trim())
-      .filter(Boolean)
-      .map((root) => path.join(root, "skills"));
-  }
-  return [path.join(home, ".claude", "skills")];
 }
 
 function walkSkillFiles(root, maxDepth = 8) {
@@ -67,7 +53,7 @@ function walkSkillFiles(root, maxDepth = 8) {
   }
 }
 
-function readSkillFile(filePath, source, root) {
+function readSkillFile(filePath, root) {
   let content;
   try {
     content = fs.readFileSync(filePath, "utf8");
@@ -83,7 +69,6 @@ function readSkillFile(filePath, source, root) {
   return {
     name,
     description: String(meta.description || "").trim(),
-    source,
     path: filePath,
     root,
   };

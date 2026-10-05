@@ -4,10 +4,10 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const {
-  dataSourceFromKey,
   extractInteractionKey,
   extractLoadedKeys,
   languageFromPayload,
+  newSessionConfigFromKey,
   sessionTitleModeFromKey,
   tokenDisplayModeFromKey,
 } = require("../src/dashboard/pluginEvents");
@@ -44,16 +44,6 @@ test("plugin event adapter ignores malformed lifecycle payloads", () => {
   assert.equal(extractInteractionKey({ serialNumber: "s1", data: {} }).key, null);
 });
 
-test("plugin event adapter reads key data source with codex default", () => {
-  assert.equal(dataSourceFromKey({ data: { dataSource: "claude" } }), "claude");
-  assert.equal(dataSourceFromKey({ config: { dataSource: "claude" } }), "claude");
-  assert.equal(dataSourceFromKey({ data: { config: { dataSource: "claude" } } }), "claude");
-  assert.equal(dataSourceFromKey({ dataSource: "claude", data: { dataSource: "codex" } }), "claude");
-  assert.equal(dataSourceFromKey({ data: { dataSource: "codex" } }), "codex");
-  assert.equal(dataSourceFromKey({ data: { dataSource: "unknown" } }), "codex");
-  assert.equal(dataSourceFromKey(null), "codex");
-});
-
 test("plugin event adapter reads session title mode with initial default", () => {
   assert.equal(sessionTitleModeFromKey({ data: { sessionTitleMode: "latest" } }), "latest");
   assert.equal(sessionTitleModeFromKey({ config: { sessionTitleMode: "latest" } }), "latest");
@@ -76,4 +66,24 @@ test("plugin event adapter extracts host language from common payload shapes", (
   assert.equal(languageFromPayload({ data: { app: { language: "en-US" } } }), "en");
   assert.equal(languageFromPayload({ config: { language: "fr-FR" } }), "en");
   assert.equal(languageFromPayload(null), null);
+});
+
+test("plugin event adapter reads new session config from nested key data", () => {
+  assert.deepEqual(newSessionConfigFromKey({
+    data: { projectPath: " /Users/me/repo ", prompt: "Fix tests", mode: "codex" },
+  }), { projectPath: "/Users/me/repo", prompt: "Fix tests", mode: "codex" });
+  assert.deepEqual(newSessionConfigFromKey({
+    data: { projectPath: "/a", config: { projectPath: "/b" } },
+    config: { mode: "work" },
+  }), { projectPath: "/b", prompt: "", mode: "work" });
+  assert.deepEqual(newSessionConfigFromKey(null), { projectPath: "", prompt: "", mode: "" });
+});
+
+test("plugin event adapter reads new session config saved at the key's top level", () => {
+  assert.deepEqual(newSessionConfigFromKey({
+    projectPath: "/Users/me/new",
+    prompt: "Hi",
+    mode: "work",
+    data: { projectPath: "/Users/me/old" },
+  }), { projectPath: "/Users/me/new", prompt: "Hi", mode: "work" });
 });

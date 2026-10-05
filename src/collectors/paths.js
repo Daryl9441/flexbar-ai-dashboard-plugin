@@ -2,7 +2,6 @@
 
 const os = require("node:os");
 const path = require("node:path");
-const { pathExists } = require("./jsonl");
 
 function resolveHome(env = process.env) {
   return env.USERPROFILE || env.HOME || os.homedir();
@@ -12,34 +11,22 @@ function resolveCodexHome(env = process.env) {
   return env.CODEX_HOME || path.join(resolveHome(env), ".codex");
 }
 
-function resolveClaudeProjectRoots(env = process.env) {
-  if (env.CLAUDE_CONFIG_DIR) {
-    return env.CLAUDE_CONFIG_DIR.split(",")
-      .map((root) => root.trim())
-      .filter(Boolean)
-      .map((root) => path.join(root, "projects"));
-  }
-
+// A path typed on the settings page: a leading "~" is the user's home, and the result
+// is absolute. Validation and the collectors both resolve overrides through this, so
+// they always look at the same directory.
+function expandUserPath(rawValue, env = process.env) {
+  const trimmed = String(rawValue).trim();
   const home = resolveHome(env);
-  return [
-    path.join(home, ".config", "claude", "projects"),
-    path.join(home, ".claude", "projects"),
-  ];
-}
 
-function resolveClaudeBridgePath(env = process.env) {
-  return env.FLEXBAR_AI_CLAUDE_EVENTS ||
-    path.join(resolveHome(env), ".flexbar-ai-dashboard", "claude-events.jsonl");
-}
+  if (trimmed === "~") return home;
+  if (trimmed.startsWith("~/")) return path.join(home, trimmed.slice(2));
+  if (trimmed.startsWith("~")) return path.join(home, trimmed.slice(1));
 
-function firstExisting(paths) {
-  return paths.find(pathExists) || null;
+  return path.resolve(trimmed);
 }
 
 module.exports = {
-  firstExisting,
-  resolveClaudeBridgePath,
-  resolveClaudeProjectRoots,
+  expandUserPath,
   resolveCodexHome,
   resolveHome,
 };

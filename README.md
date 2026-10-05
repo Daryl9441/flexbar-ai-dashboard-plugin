@@ -140,6 +140,14 @@ Build the backend bundle:
 npm run build
 ```
 
+Key images are rendered with `@napi-rs/canvas`, whose native binary is platform specific. The build copies it into `backend/node_modules` for the machine running the build. To build for other platforms, set `FLEX_TARGET` to a comma-separated list (`darwin-arm64`, `darwin-x64`, `win32-x64`, ...) or an alias (`darwin`, `win32`, `all` = macOS arm64 + x64 and Windows x64):
+
+```bash
+FLEX_TARGET=all npm run build
+```
+
+Binaries missing from `node_modules` are fetched with `npm pack` at the exact installed `@napi-rs/canvas` version (cached in the system temp directory; `package.json` and the lockfile are untouched). The build fails if a requested binary cannot be bundled.
+
 Pack the `.flexplugin` artifact:
 
 ```bash
@@ -166,6 +174,12 @@ Artifacts:
 - Plugin directory: `com.aspen.flexbar-ai-dashboard.plugin`
 - Backend entry: `com.aspen.flexbar-ai-dashboard.plugin/backend/plugin.cjs`
 - Packed file: `com.aspen.flexbar-ai-dashboard.flexplugin`
+
+Releases: pushing a `v*` tag runs `.github/workflows/release.yml`, which calls `npm run release:pack` (needs `flexcli` on `PATH`) and uploads `dist/*.flexplugin`. FlexDesigner installs the `<os>.<arch>` asset that matches the user's machine:
+
+- `com.aspen.flexbar-ai-dashboard.darwin.arm64.flexplugin` / `.darwin.x64.flexplugin` (both contain the macOS arm64 and x64 binaries)
+- `com.aspen.flexbar-ai-dashboard.win32.x64.flexplugin`
+- `com.aspen.flexbar-ai-dashboard.flexplugin` (generic, all three binaries)
 
 ## Project Structure
 

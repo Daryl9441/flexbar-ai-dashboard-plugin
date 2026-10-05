@@ -32,9 +32,21 @@ The default bridge file is `~/.flexbar-ai-dashboard/claude-events.jsonl`. Overri
 - **AI Session**: shows a recent active Codex or Claude Code session. The key can be configured by data source and session title mode.
 - **Token Usage**: shows observed local token usage. Supports summary mode and recent chart mode.
 - **Plan Usage**: shows remaining Codex or Claude Code plan / rate-limit windows.
+- **Reset Timer**: counts down to the next plan-usage window reset of the selected provider.
+- **New Codex Session**: opens a new thread in the ChatGPT desktop app (see below).
 - **AI Skill**: lets you select a Codex or Claude Code skill. Pressing the key pastes `Use the <skill> skill.` into the current input target.
 
 The plugin includes English and Chinese UI strings and follows the host language where possible.
+
+### New Codex Session / 新建 Codex 会话
+
+Pressing the key opens `codex://threads/new?mode=<codex|work|chat>[&path=<project folder>][&prompt=<text>]` with the system URL handler (`open` on macOS, PowerShell `Start-Process` on Windows). The `codex://` scheme is registered by the **ChatGPT desktop app** (bundle id `com.openai.codex`), which must be installed; otherwise a "Could not open the ChatGPT app" notification appears.
+
+- **Mode**: Codex, Work or Chat surface of the app.
+- **Project folder**: optional absolute path; the list offers recent Codex session folders. Empty means the app's current project. The first time a folder is opened this way, ChatGPT shows its one-time "trust this folder" dialog.
+- **Starting prompt**: optional; it is only prefilled in the composer. Nothing is sent until you press send in the app.
+
+按下按键会通过 `codex://threads/new` 深链接在 ChatGPT 桌面应用中新建会话（需已安装 ChatGPT 桌面应用）。项目目录可选，首次使用某个目录时 ChatGPT 会弹出一次信任确认；起始提示词只会预填到输入框，不会自动发送。
 
 ## References
 
@@ -46,22 +58,27 @@ This plugin does not fork upstream code. It adapts behavior and data formats fro
 - [Claude Code hooks docs](https://docs.anthropic.com/en/docs/claude-code/hooks): hook configuration structure in `~/.claude/settings.json`.
 - [Claude Code statusLine docs](https://docs.anthropic.com/en/docs/claude-code/statusline): statusLine JSON input via stdin and status text via stdout.
 
-Implementation plans live in `docs/superpowers/plans/`.
-
 ## Installation
 
-### Prerequisites
+### From a release
 
-- Node.js 18 or later
+Each GitHub release has one `.flexplugin` per platform, each bundling the matching `@napi-rs/canvas` native binaries (key images cannot be rendered without them). FlexDesigner picks the asset for your machine when installing from the repository link; for a manual import pick it yourself:
+
+| Asset | Contains |
+| --- | --- |
+| `com.aspen.flexbar-ai-dashboard.darwin.arm64.flexplugin` | macOS arm64 + x64 |
+| `com.aspen.flexbar-ai-dashboard.darwin.x64.flexplugin` | macOS arm64 + x64 |
+| `com.aspen.flexbar-ai-dashboard.win32.x64.flexplugin` | Windows x64 |
+| `com.aspen.flexbar-ai-dashboard.flexplugin` | generic: all three |
+
+### Prerequisites (building from source)
+
+- Node.js 20.10 or later (22/24 LTS work too). FlexCLI 1.0.7 imports JSON with import attributes (`with { type: 'json' }`), which needs Node.js 18.20+/20.10+; Node.js 18 is end-of-life, so 20.10 is the minimum (`engines` in `package.json`).
 - FlexDesigner 1.3.0 or later
 - A Flexbar device
-- FlexCLI (optional: the npm scripts run `@eniac/flexcli@1.0.7` through `npx` via `scripts/flexcli.cjs`)
+- No global FlexCLI: the npm scripts run `@eniac/flexcli@1.0.7` through `npx` via `scripts/flexcli.cjs`.
 
-```bash
-npm install -g @eniac/flexcli
-```
-
-FlexCLI 1.0.7 crashes on Node.js 22+ with `SyntaxError: Unexpected identifier 'assert'`. `scripts/flexcli.cjs` patches this at load time, so run FlexCLI through the `npm run plugin:*` scripts (or `node scripts/flexcli.cjs ...`) instead of a global `flexcli`, or use Node.js 20 LTS.
+FlexCLI 1.0.7 also uses the older `assert { type: 'json' }` syntax, which Node.js 22+ rejects (`SyntaxError: Unexpected identifier 'assert'`). `scripts/flexcli.cjs` patches this at load time, so run FlexCLI through the `npm run plugin:*` scripts (or `node scripts/flexcli.cjs ...`) instead of a global `flexcli`.
 
 ### Install Dependencies
 
@@ -73,20 +90,33 @@ npm install
 
 ## macOS local install / 本地安装 (macOS)
 
-The `.flexplugin` attached to GitHub releases is built on Ubuntu, and the build only bundles the `@napi-rs/canvas` native binary of the machine it runs on (`@napi-rs/canvas-linux-x64-gnu`). On macOS that binary cannot load, so key images cannot be rendered: the Flexbar keeps showing the default icons and never the Codex / Claude data, even though the backend collects it. Build and install from source on the Mac instead:
+The darwin release assets already contain the macOS arm64 and x64 binaries. To run unreleased changes, build and install from source on the Mac (FlexDesigner must be running; FlexCLI talks to it over a local WebSocket):
 
-GitHub Release 里的 `.flexplugin` 是在 Ubuntu 上构建的，只包含 linux-x64 的 canvas 原生二进制。macOS 无法加载它，按键图片无法渲染，Flexbar 只显示默认图标、不显示 Codex / Claude 数据（后端其实已采集到）。请在 Mac 上从源码构建并安装：
+Release 中的 darwin 资源已包含 macOS arm64 与 x64 的原生二进制。如需运行未发布的代码，请在 Mac 上从源码构建并安装（FlexDesigner 必须处于运行状态，FlexCLI 通过本地 WebSocket 与其通信）：
 
 ```bash
 npm install
-npm run doctor          # preflight check / 环境自检
 npm run plugin:install  # build -> doctor -> flexcli plugin pack -> flexcli plugin install --force
 ```
 
-- FlexDesigner must be running for `plugin:install` (and `dev`); FlexCLI talks to it over a local WebSocket. / 执行 `plugin:install`（以及 `dev`）时 FlexDesigner 必须处于运行状态。
-- Manual import: run `npm run plugin:pack`, then import `com.aspen.flexbar-ai-dashboard.flexplugin` with the **+** button at the top right of the key library. / 手动导入：执行 `npm run plugin:pack`，再通过按键库右上角的 **+** 导入该文件。
-- `npm run doctor` checks Node.js, `manifest.json` (uuid vs. folder), the built backend, and that the `@napi-rs/canvas` binary for this OS/CPU is bundled and loads from the plugin folder alone. It runs automatically before `plugin:pack`, `plugin:install` and `dev`. / 打包、安装和 `dev` 前会自动执行自检。
-- Check an installed copy (read-only) / 检查已安装的插件（只读）：`node scripts/doctor.cjs --plugin-dir="$HOME/Library/Application Support/FlexDesigner/data/plugins/com.aspen.flexbar-ai-dashboard"`. Check a build for another OS / 检查其他平台的构建：`FLEX_TARGET=win32-x64 npm run doctor`.
+- **Check the result / 确认结果**: the install succeeded only if the output contains `Install command successful`. FlexCLI exits with code 0 even when FlexDesigner rejects the install (`Install command failed`), so do not rely on the exit code. / 输出中出现 `Install command successful` 才表示安装成功；FlexDesigner 拒绝安装时（`Install command failed`）FlexCLI 的退出码仍为 0。
+- **Manual import / 手动导入**: `npm run plugin:pack`, then import `com.aspen.flexbar-ai-dashboard.flexplugin` with the **+** button at the top right of the key library. / 执行 `npm run plugin:pack`，再通过按键库右上角的 **+** 导入该文件。
+- **config.json**: local settings that FlexDesigner writes into the plugin folder while it is linked for development (e.g. path overrides). `plugin:pack` moves it out of the folder while packing and restores it afterwards, so it never ends up in the `.flexplugin`. / 打包时会临时移走插件目录中的 `config.json`，打包后自动恢复，不会被打进 `.flexplugin`。
+
+### Doctor / 环境自检
+
+`npm run doctor` runs automatically before `plugin:pack`, `plugin:install` and `dev` (they chain `npm run build && npm run doctor` explicitly, so it also runs with pnpm, yarn or `--ignore-scripts`). It checks:
+
+- Node.js >= 20.10 and `manifest.json` (uuid vs. folder name), the built backend, and a stray `config.json`;
+- for every target in `FLEX_TARGET` (same syntax as the build, see [Build and Deploy](#build-and-deploy)), that `@napi-rs/canvas-<target>` is bundled with the same version as `@napi-rs/canvas`;
+- that canvas loads from the plugin folder alone and renders a PNG in the runtime that will execute the plugin: on macOS FlexDesigner's own plugin runtime (`FlexDesigner Helper` with `ELECTRON_RUN_AS_NODE=1`), falling back to this Node.js with a warning when FlexDesigner is not installed; set `FLEX_NODE_RUNTIME=<binary>` to choose another. Only the binary matching that runtime is loaded; binaries for other platforms are checked, never loaded.
+
+自检会检查 Node.js 版本、manifest、构建产物，以及 `FLEX_TARGET` 中每个目标平台的 canvas 原生包是否存在且版本一致，并在实际运行插件的运行时（macOS 上为 FlexDesigner 自带的运行时）中加载 canvas。其他平台的二进制只检查、不加载。
+
+```bash
+FLEX_TARGET=all npm run doctor   # check a build made with FLEX_TARGET=all
+node scripts/doctor.cjs --plugin-dir="$HOME/Library/Application Support/FlexDesigner/data/plugins/com.aspen.flexbar-ai-dashboard"   # an installed copy (read-only)
+```
 
 ## Development
 
@@ -98,7 +128,7 @@ npm run dev
 
 This command:
 
-- builds the backend and runs `npm run doctor` (`predev`)
+- builds the backend and runs `npm run doctor`
 - unlinks the old `com.aspen.flexbar-ai-dashboard` plugin
 - links `com.aspen.flexbar-ai-dashboard.plugin`
 - starts Rollup in watch mode
@@ -161,23 +191,27 @@ Build the backend bundle:
 npm run build
 ```
 
-Key images are rendered with `@napi-rs/canvas`, whose native binary is platform specific. The build copies it into `backend/node_modules` for the machine running the build. To build for other platforms, set `FLEX_TARGET` to a comma-separated list (`darwin-arm64`, `darwin-x64`, `win32-x64`, ...) or an alias (`darwin`, `win32`, `all` = macOS arm64 + x64 and Windows x64):
+Key images are rendered with `@napi-rs/canvas`, whose native binary is platform specific, and `npm install` only installs the one for the Node.js running it. The build copies the binaries selected by `FLEX_TARGET` into `backend/node_modules` (default: the build machine). `FLEX_TARGET` takes a comma-separated list of `darwin-arm64`, `darwin-x64`, `win32-x64` (also `win32-arm64`, `linux-x64`, `linux-arm64`, `linux-arm`, `android-arm64`) and the aliases `darwin` (both Mac binaries), `win32` (Windows x64), `all` (macOS arm64 + x64 and Windows x64) and `host`:
 
 ```bash
-FLEX_TARGET=all npm run build
+FLEX_TARGET=all npm run build                 # macOS / Linux shells
+FLEX_TARGET=darwin-arm64,win32-x64 npm run plugin:pack
 ```
 
-On Windows PowerShell: `$env:FLEX_TARGET='all'; npm run build`.
+```powershell
+$env:FLEX_TARGET='all'; npm run build         # Windows PowerShell
+Remove-Item Env:FLEX_TARGET                   # back to the default
+```
 
-Binaries missing from `node_modules` are fetched with `npm pack` at the exact installed `@napi-rs/canvas` version (cached in the system temp directory; `package.json` and the lockfile are untouched). The build fails if a requested binary cannot be bundled.
+Binaries missing from `node_modules` are fetched with `npm pack` at the exact installed `@napi-rs/canvas` version (cached in the system temp directory; `package.json` and the lockfile are untouched). The build fails if a requested binary cannot be bundled. Pass the same `FLEX_TARGET` to `npm run doctor`, `plugin:pack` and `plugin:install`; they rebuild with it.
 
-Pack the `.flexplugin` artifact (runs `npm run build` and `npm run doctor` first):
+Pack the `.flexplugin` artifact (builds and runs the doctor first; writes `com.aspen.flexbar-ai-dashboard.flexplugin` next to the plugin folder):
 
 ```bash
 npm run plugin:pack
 ```
 
-Install the packed artifact into the running FlexDesigner (runs `plugin:pack` first):
+Install the packed artifact into the running FlexDesigner (runs `plugin:pack` first; look for `Install command successful`):
 
 ```bash
 npm run plugin:install
@@ -187,9 +221,8 @@ Recommended release checklist:
 
 ```bash
 npm test
-npm run build
 npm run plugin:validate
-npm run plugin:pack
+FLEX_TARGET=all npm run plugin:pack
 ```
 
 Artifacts:
@@ -198,11 +231,7 @@ Artifacts:
 - Backend entry: `com.aspen.flexbar-ai-dashboard.plugin/backend/plugin.cjs`
 - Packed file: `com.aspen.flexbar-ai-dashboard.flexplugin`
 
-Releases: pushing a `v*` tag runs `.github/workflows/release.yml`, which calls `npm run release:pack` (needs `flexcli` on `PATH`) and uploads `dist/*.flexplugin`. FlexDesigner installs the `<os>.<arch>` asset that matches the user's machine:
-
-- `com.aspen.flexbar-ai-dashboard.darwin.arm64.flexplugin` / `.darwin.x64.flexplugin` (both contain the macOS arm64 and x64 binaries)
-- `com.aspen.flexbar-ai-dashboard.win32.x64.flexplugin`
-- `com.aspen.flexbar-ai-dashboard.flexplugin` (generic, all three binaries)
+Releases: pushing a `v*` tag runs `.github/workflows/release.yml`, which calls `npm run release:pack` (`scripts/pack-release.cjs`: one `npm run plugin:pack` per asset with the matching `FLEX_TARGET`) and uploads `dist/*.flexplugin`, the assets listed under [From a release](#from-a-release). FlexDesigner looks for `<uuid>.<os>.<arch>.flexplugin` and may pick either darwin asset on any Mac, so both carry the arm64 and x64 binaries.
 
 ## Project Structure
 
@@ -217,9 +246,9 @@ com.aspen.flexbar-ai-dashboard.plugin/
   ui/              global config page and key config pages
   backend/         Rollup build output
 
-scripts/           doctor.cjs preflight check and flexcli.cjs FlexCLI wrapper
+scripts/           doctor.cjs preflight, flexcli.cjs FlexCLI wrapper, native-canvas.cjs
+                   (FLEX_TARGET binaries), pack-release.cjs (release assets)
 test/              Node test runner tests
-docs/              implementation plans and maintenance notes
 ```
 
 ## Notes

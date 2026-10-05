@@ -4,13 +4,17 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 const { summarizeReasoning, summarizeToolAction } = require("./actionSummary");
-const { latestFile, readJsonlTail, safeMtimeMs, walkJsonlFiles } = require("./jsonl");
+const { latestFile, readJsonlTail, readJsonlTailBytes, safeMtimeMs, walkJsonlFiles } = require("./jsonl");
 const { resolveCodexHome } = require("./paths");
 
 const CODEX_ACTIVITY_STALE_MS = 30_000;
 const CODEX_OPEN_TURN_STALE_MS = 30 * 60_000;
 const CODEX_SESSION_TAIL_LINES = 500;
 const RECENT_TOKEN_EVENTS_LIMIT = 10;
+const CODEX_THREAD_ACTIVITY_WINDOW_MS = 2 * 60 * 60_000;
+const CODEX_THREAD_ACTIVITY_MAX = 12;
+const CODEX_THREAD_TAIL_BYTES = 512 * 1024;
+const codexThreadTailCache = new Map();
 
 function parseCodexEvent(entry) {
   const payload = entry && entry.payload ? entry.payload : {};
@@ -522,6 +526,49 @@ function attachCodexSessionDetails(sessions, activeSession) {
     });
 }
 
+// codex app-server lists every thread as "notLoaded" (the ChatGPT app runs its own
+// server), so each recently touched thread's progress is read from the tail of its
+// rollout file. Tails are cached by mtime + size so idle files are not re-read.
+function attachCodexThreadActivity(threads, options = {}) {
+  const now = Number.isFinite(options.now) ? options.now : Date.now();
+  const windowMs = Number.isFinite(options.windowMs) ? options.windowMs : CODEX_THREAD_ACTIVITY_WINDOW_MS;
+  const maxThreads = Number.isFinite(options.maxThreads) ? options.maxThreads : CODEX_THREAD_ACTIVITY_MAX;
+  const cache = options.cache || codexThreadTailCache;
+  const used = new Set();
+
+  const result = threads.map((thread) => {
+    if (!thread || !thread.path || thread.activity || used.size >= maxThreads) return thread;
+    let stat;
+    try {
+      stat = fs.statSync(thread.path);
+    } catch {
+      return thread;
+    }
+    if (now - stat.mtimeMs > windowMs) return thread;
+
+    used.add(thread.path);
+    const events = cachedCodexThreadTail(cache, thread.path, stat);
+    return {
+      ...thread,
+      activity: inferCodexActivity(events, now),
+      lastActivityAt: latestCodexEventTimestamp(events) || thread.lastActivityAt || null,
+    };
+  });
+
+  for (const cachedPath of cache.keys()) {
+    if (!used.has(cachedPath)) cache.delete(cachedPath);
+  }
+  return result;
+}
+
+function cachedCodexThreadTail(cache, filePath, stat) {
+  const cached = cache.get(filePath);
+  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) return cached.events;
+  const events = readJsonlTailBytes(filePath, { maxBytes: CODEX_THREAD_TAIL_BYTES, maxLines: CODEX_SESSION_TAIL_LINES });
+  cache.set(filePath, { mtimeMs: stat.mtimeMs, size: stat.size, events });
+  return events;
+}
+
 function isArchivedSession(session) {
   if (!session) return false;
   if (session.internal === true) return true;
@@ -630,7 +677,7 @@ async function collectCodexAppServer({ codexHome, timeoutMs = 3_500, includeQuot
 function normalizeCodexThread(thread) {
   return {
     id: thread.id || null,
-    title: thread.name || thread.title || null,
+    title: thread.name || thread.title || summarizeTitleText(thread.preview) || null,
     cwd: thread.cwd || null,
     path: thread.path || null,
     status: thread.status || null,
@@ -811,7 +858,7 @@ async function collectCodexSnapshot(options = {}) {
     timeoutMs: options.oauthTimeoutMs || 6_000,
   });
   const rawSessions = appServer && appServer.threads.length > 0
-    ? appServer.threads
+    ? attachCodexThreadActivity(appServer.threads, { now: options.now })
     : readCodexSessionsFromFiles(files, codexHome, { includeUsage });
   const activeSession = chooseActiveCodexSession(rawSessions, latestFileSession);
   const sessions = attachCodexSessionDetails(rawSessions, activeSession);
@@ -889,6 +936,7 @@ function findLastIndex(values, predicate) {
 }
 
 module.exports = {
+  attachCodexThreadActivity,
   collectCodexAppServer,
   collectCodexSnapshot,
   collectCodexOAuthQuota,

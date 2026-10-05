@@ -1,7 +1,7 @@
 <template>
   <div class="key-config">
     <v-card class="mx-auto key-card" max-width="720" variant="flat" color="transparent">
-      <v-card-item prepend-icon="mdi-robot" title="AI Session" subtitle="Configure this session key." class="px-0 py-1">
+      <v-card-item prepend-icon="mdi-robot" title="AI Session" subtitle="Shows one session; tap the key on the Flexbar to list all running sessions (blue running, orange awaiting approval, green done)." class="px-0 py-1">
         <template #append>
           <v-chip color="orange" variant="tonal" size="small">{{ sourceLabel }}</v-chip>
         </template>

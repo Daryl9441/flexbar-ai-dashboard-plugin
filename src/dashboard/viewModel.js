@@ -45,6 +45,58 @@ function buildDashboardViewModel(snapshot, state = createDashboardState(), optio
   };
 }
 
+const SESSION_OVERVIEW_RECENT_MS = 30 * 60_000;
+
+// Every session that is running now, waiting for approval, finished while we were
+// watching and not yet viewed, or had activity in the last 30 minutes. Running ones
+// first, then finished ones, each newest first.
+function buildSessionOverview(snapshot, state = createDashboardState(), options = {}) {
+  const language = normalizeLanguage(options.language);
+  const now = Number.isFinite(Number(options.now)) ? Number(options.now) : Date.now();
+  const recentMs = Number.isFinite(Number(options.recentMs)) ? Number(options.recentMs) : SESSION_OVERVIEW_RECENT_MS;
+
+  const items = [];
+  for (const session of rankSessions(snapshot)) {
+    const active = isActiveActivity(session.activity);
+    state.noteSession(session.key, active);
+    const approval = active && session.activity.state === "approval";
+    const unreadFinished = state.isUnreadFinished(session.key);
+    const lastActivity = sessionLastActivityValue(session);
+    const recent = lastActivity > 0 && now - lastActivity <= recentMs;
+    if (!active && !unreadFinished && !recent) continue;
+
+    const status = approval ? "approval" : active ? "running" : "done";
+    const title = titleFromSession(session, language);
+    items.push({
+      sessionKey: session.key,
+      title,
+      latestTitle: session.latestTitle || title,
+      status,
+      statusColor: overviewStatusColor(status),
+    });
+  }
+
+  return {
+    items,
+    runningCount: items.filter((item) => item.status !== "done").length,
+    doneCount: items.filter((item) => item.status === "done").length,
+  };
+}
+
+function applyOverviewTitleMode(overview, mode) {
+  if (!overview || mode !== "latest") return overview;
+  return {
+    ...overview,
+    items: overview.items.map((item) => ({ ...item, title: item.latestTitle || item.title })),
+  };
+}
+
+function overviewStatusColor(status) {
+  if (status === "approval") return "orange";
+  if (status === "running") return "blue";
+  return "green";
+}
+
 function rankSessions(snapshot) {
   const providers = snapshot && snapshot.providers || {};
   return [
@@ -465,8 +517,11 @@ function clampPercent(value) {
 }
 
 module.exports = {
+  SESSION_OVERVIEW_RECENT_MS,
   buildDashboardViewModel,
+  buildSessionOverview,
   createDashboardState,
+  applyOverviewTitleMode,
   applySessionTitleMode,
   formatActivityText,
   rankSessions,

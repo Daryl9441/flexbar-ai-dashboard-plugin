@@ -30,6 +30,8 @@ The default bridge file is `~/.flexbar-ai-dashboard/claude-events.jsonl`. Overri
 ## Flexbar Keys
 
 - **AI Session**: shows a recent active Codex or Claude Code session. The key can be configured by data source and session title mode.
+  - **Tap to list all sessions / 点击查看所有会话**: tapping the key switches it to an overview of every session of its data source that is running, waiting for approval, finished in the last 30 minutes, or finished while you were away and not yet viewed — one title per row with a colored dot: **blue** running, **orange** waiting for approval, **green** done. Tap again to return; the finished sessions it listed count as viewed. / 点击按键切换为会话总览：每行一个会话标题和一个圆点，**蓝色**=进行中，**橙色**=等待批准，**绿色**=已完成；再次点击返回单会话视图。
+  - Codex progress per session is read from each recently active thread's rollout file (`$CODEX_HOME/sessions/**`), since `codex app-server` reports threads opened in the ChatGPT app as `notLoaded`.
 - **Token Usage**: shows observed local token usage. Supports summary mode and recent chart mode.
 - **Plan Usage**: shows remaining Codex or Claude Code plan / rate-limit windows.
 - **Reset Timer**: counts down to the next plan-usage window reset of the selected provider.

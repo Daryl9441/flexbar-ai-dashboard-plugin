@@ -191,6 +191,60 @@ function renderSessionKey(view, options = {}) {
   });
 }
 
+const OVERVIEW_ROWS = 3;
+const OVERVIEW_MIN_COLUMN_WIDTH = 150;
+
+// Session overview: one dot + title per session in a 3-row grid that fills columns
+// left to right; the dot color says whether the session is still running.
+function renderSessionOverviewKey(view, options = {}) {
+  const language = normalizeLanguage(options.language);
+  return renderKey(options, (ctx, width) => {
+    drawBackground(ctx, width);
+
+    const items = Array.isArray(view && view.items) ? view.items : [];
+    if (items.length === 0) {
+      drawText(ctx, t(language, "noActiveSessions"), width / 2, 36, {
+        font: fontSpec("bold", 16),
+        align: "center",
+        color: "#d4d4d8",
+        maxWidth: width - 20,
+      });
+      return;
+    }
+
+    const padding = 8;
+    const columns = Math.max(1, Math.floor((width - padding * 2) / OVERVIEW_MIN_COLUMN_WIDTH));
+    const columnWidth = (width - padding * 2) / columns;
+    const capacity = columns * OVERVIEW_ROWS;
+    const overflow = items.length > capacity ? items.length - (capacity - 1) : 0;
+    const visible = overflow ? items.slice(0, capacity - 1) : items;
+    const rowY = (row) => 12 + row * 18;
+
+    visible.forEach((item, index) => {
+      const column = Math.floor(index / OVERVIEW_ROWS);
+      const row = index % OVERVIEW_ROWS;
+      const x = padding + column * columnWidth;
+      const y = rowY(row);
+      drawStatusLight(ctx, x + 5, y, item.statusColor, 4.5);
+      drawText(ctx, item.title || t(language, "untitled"), x + 15, y + 4.5, {
+        font: fontSpec(item.status === "done" ? "normal" : "bold", 13),
+        color: item.status === "done" ? "#d4d4d8" : "#ffffff",
+        maxWidth: columnWidth - 21,
+      });
+    });
+
+    if (overflow) {
+      const index = capacity - 1;
+      const x = padding + Math.floor(index / OVERVIEW_ROWS) * columnWidth;
+      drawText(ctx, `+${overflow}`, x + 15, rowY(index % OVERVIEW_ROWS) + 4.5, {
+        font: fontSpec("bold", 13),
+        color: "#a1a1aa",
+        maxWidth: columnWidth - 21,
+      });
+    }
+  });
+}
+
 function renderSkillKey(view, options = {}) {
   const language = normalizeLanguage(options.language);
   return renderKey(options, (ctx, width) => {
@@ -273,7 +327,7 @@ function drawLabel(ctx, label, x, y) {
   });
 }
 
-function drawStatusLight(ctx, x, y, colorName) {
+function drawStatusLight(ctx, x, y, colorName, radius = 6) {
   const fill = {
     orange: "#f97316",
     green: "#22c55e",
@@ -283,7 +337,7 @@ function drawStatusLight(ctx, x, y, colorName) {
 
   ctx.beginPath();
   ctx.fillStyle = fill;
-  ctx.arc(x, y, 6, 0, Math.PI * 2);
+  ctx.arc(x, y, radius, 0, Math.PI * 2);
   ctx.fill();
 }
 
@@ -406,6 +460,7 @@ module.exports = {
   renderPlanUsageKey,
   renderResetTimerKey,
   renderSessionKey,
+  renderSessionOverviewKey,
   renderSkillKey,
   renderTokenUsageKey,
   fontSpec,

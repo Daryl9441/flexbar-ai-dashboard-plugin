@@ -3,12 +3,19 @@
 const { plugin, logger } = require("@eniac/flexdesigner");
 const { collectAiSnapshot, compactSnapshot } = require("./collectors/snapshot");
 const { applyUsageCache, captureUsageCache } = require("./collectors/usageCache");
-const { createDashboardState, buildDashboardViewModel, applySessionTitleMode } = require("./dashboard/viewModel");
+const {
+  applyOverviewTitleMode,
+  applySessionTitleMode,
+  buildDashboardViewModel,
+  buildSessionOverview,
+  createDashboardState,
+} = require("./dashboard/viewModel");
 const {
   renderNewSessionKey,
   renderPlanUsageKey,
   renderResetTimerKey,
   renderSessionKey,
+  renderSessionOverviewKey,
   renderTokenUsageKey,
 } = require("./dashboard/render");
 const {
@@ -96,6 +103,10 @@ const keyDrawCache = createKeyDrawCache({
 const keyData = {};
 const dashboardKeys = new Map();
 const assignedSessionByKey = new Map();
+// AI Session keys toggled (by tap) into the all-sessions overview, and the
+// finished sessions each one is showing, marked viewed when it toggles back.
+const overviewKeys = new Set();
+const overviewDoneSessionsByKey = new Map();
 const dashboardState = createDashboardState();
 let latestSnapshot = null;
 let snapshotTimer = null;
@@ -404,6 +415,7 @@ function handleKeysLoaded(payload) {
     if (item.serialNumber === serialNumber && !aliveKeys.has(uid)) {
       dashboardKeys.delete(uid);
       assignedSessionByKey.delete(uid);
+      forgetSessionOverview(uid);
       keyDrawCache.invalidateKey(serialNumber, uid);
     }
   }
@@ -423,6 +435,7 @@ function handleKeysRemoved(payload) {
     if (sameDevice && listedKey) {
       dashboardKeys.delete(uid);
       assignedSessionByKey.delete(uid);
+      forgetSessionOverview(uid);
       delete keyData[uid];
       keyDrawCache.invalidateKey(item.serialNumber, uid);
     }
@@ -438,6 +451,7 @@ async function handleKeyInteraction(payload) {
   if (key.cid === SESSION_CID) {
     const sessionKey = assignedSessionByKey.get(key.uid);
     if (sessionKey) dashboardState.markViewed(sessionKey);
+    toggleSessionOverview(key.uid);
     drawDashboardKeys();
     return;
   }
@@ -608,8 +622,21 @@ function drawAllDashboardKeys() {
     }),
   };
 
+  // Built for every source with session keys so finished sessions are tracked
+  // even while no key shows the overview.
+  const overviews = {};
+  for (const source of new Set(sessionItems.map((item) => dataSourceFromKey(item.key)))) {
+    overviews[source] = buildSessionOverview(snapshotForDataSource(latestSnapshot, source), dashboardState, {
+      language: currentLanguage,
+    });
+  }
+
   sessionItems.forEach((item) => {
     const source = dataSourceFromKey(item.key);
+    if (overviewKeys.has(item.key.uid)) {
+      drawSessionOverviewKey(item, overviews[source]);
+      return;
+    }
     const index = sessionIndexes[source]++;
     const model = sessionModels[source];
     const view = applySessionTitleMode(
@@ -658,6 +685,36 @@ function drawAllDashboardKeys() {
 function drawDefaultSkillKey(serialNumber, key) {
   configureDefaultSkillKey(key, skillFallbackTitle(key));
   keyDrawCache.drawKey(serialNumber, key, "draw");
+}
+
+function toggleSessionOverview(uid) {
+  if (overviewKeys.delete(uid)) {
+    for (const sessionKey of overviewDoneSessionsByKey.get(uid) || []) {
+      dashboardState.markViewed(sessionKey);
+    }
+    overviewDoneSessionsByKey.delete(uid);
+    return;
+  }
+  overviewKeys.add(uid);
+}
+
+function forgetSessionOverview(uid) {
+  overviewKeys.delete(uid);
+  overviewDoneSessionsByKey.delete(uid);
+}
+
+function drawSessionOverviewKey(item, overview) {
+  const view = applyOverviewTitleMode(overview || { items: [], runningCount: 0, doneCount: 0 }, sessionTitleModeFromKey(item.key));
+  overviewDoneSessionsByKey.set(
+    item.key.uid,
+    view.items.filter((entry) => entry.status === "done").map((entry) => entry.sessionKey)
+  );
+  assignedSessionByKey.delete(item.key.uid);
+  drawImageKey(item.serialNumber, item.key, view, renderSessionOverviewKey, sessionOverviewFallbackTitle(view));
+}
+
+function sessionOverviewFallbackTitle(view) {
+  return `${view.runningCount} ${t(currentLanguage, "overviewRunning")} · ${view.doneCount} ${t(currentLanguage, "overviewDone")}`;
 }
 
 function drawNewSessionKey(serialNumber, key) {

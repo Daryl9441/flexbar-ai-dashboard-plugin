@@ -178,7 +178,7 @@
             "PluginName": "flexbar-ai-dashboard",
             "Session": {
                 "Title": "AI Session",
-                "Tip": "Shows one recent Codex or Claude session"
+                "Tip": "Shows one recent Codex or Claude session; tap to list all running sessions"
             },
             "TokenUsage": {
                 "Title": "Token Usage",
@@ -205,7 +205,7 @@
             "PluginName": "Flexbar AI \u4eea\u8868\u76d8",
             "Session": {
                 "Title": "AI \u4f1a\u8bdd",
-                "Tip": "\u663e\u793a\u4e00\u4e2a\u6700\u8fd1\u7684 Codex \u6216 Claude \u4f1a\u8bdd"
+                "Tip": "\u663e\u793a\u4e00\u4e2a\u6700\u8fd1\u7684 Codex \u6216 Claude \u4f1a\u8bdd\uff1b\u70b9\u51fb\u53ef\u67e5\u770b\u6240\u6709\u8fdb\u884c\u4e2d\u7684\u4f1a\u8bdd"
             },
             "TokenUsage": {
                 "Title": "\u4ee4\u724c\u7528\u91cf",

@@ -70,6 +70,46 @@ function readJsonlTail(filePath, maxLines = 200) {
   }).filter(Boolean);
 }
 
+// Reads only the last maxBytes of a JSONL file (rollouts can grow to many MB) and
+// parses its last maxLines complete lines.
+function readJsonlTailBytes(filePath, { maxBytes = 512 * 1024, maxLines = 500 } = {}) {
+  let fd;
+  try {
+    fd = fs.openSync(filePath, "r");
+    const { size } = fs.fstatSync(fd);
+    const length = Math.min(size, maxBytes);
+    const buffer = Buffer.alloc(length);
+    fs.readSync(fd, buffer, 0, length, size - length);
+    let content = buffer.toString("utf8");
+    if (length < size) {
+      // Drop the partial first line cut by the byte window.
+      const newline = content.indexOf("\n");
+      content = newline >= 0 ? content.slice(newline + 1) : "";
+    }
+    return parseJsonlLines(content.split(/\r?\n/).filter(Boolean).slice(-maxLines));
+  } catch {
+    return [];
+  } finally {
+    if (fd !== undefined) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        // ignore
+      }
+    }
+  }
+}
+
+function parseJsonlLines(lines) {
+  return lines.map((line) => {
+    try {
+      return JSON.parse(line);
+    } catch {
+      return null;
+    }
+  }).filter(Boolean);
+}
+
 function readJsonlFiles(files, maxLinesPerFile = 200) {
   return files.flatMap((filePath) => {
     return readJsonlTail(filePath, maxLinesPerFile).map((entry) => ({
@@ -88,6 +128,7 @@ module.exports = {
   pathExists,
   readJsonlFiles,
   readJsonlTail,
+  readJsonlTailBytes,
   safeMtimeMs,
   walkJsonlFiles,
 };

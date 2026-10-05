@@ -1,4 +1,3 @@
-
 name: Pack files and release
 
 on:
@@ -13,26 +12,40 @@ jobs:
 
     steps:
       - name: Code checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
+      # Keep Node 20: @eniac/flexcli 1.0.7 uses `import ... assert { type: "json" }`,
+      # which Node 22+ rejects.
       - name: Setup Node
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
           node-version: 20
 
       - name: Install dependencies
         run: npm i
-    
+
       - name: Install FlexCli
         run: npm install -g @eniac/flexcli
 
-      - name: Build Plugin
-        run: npm run build
+      # npm only installs the @napi-rs/canvas binary of this Linux runner, so each
+      # asset fetches the binaries it needs (FLEX_TARGET) and the build fails if one
+      # is missing. Produces, in dist/:
+      #   com.aspen.flexbar-ai-dashboard.darwin.arm64.flexplugin  macOS arm64 + x64
+      #   com.aspen.flexbar-ai-dashboard.darwin.x64.flexplugin    macOS arm64 + x64
+      #   com.aspen.flexbar-ai-dashboard.win32.x64.flexplugin     Windows x64
+      #   com.aspen.flexbar-ai-dashboard.flexplugin               all of the above (generic fallback)
+      # FlexDesigner picks the <os>.<arch> asset matching the user's machine.
+      - name: Build and pack platform plugins
+        run: npm run release:pack
 
-      - name: Pack Plugin
-        run: npm run plugin:pack
+      - name: Check bundled native binaries
+        run: |
+          for asset in dist/*.flexplugin; do
+            echo "$asset"
+            unzip -l "$asset" | grep -E 'canvas-[^/]+/skia\.[^/]+\.node$'
+          done
 
       - name: Upload Release Asset
         uses: softprops/action-gh-release@v2
         with:
-          files: com.aspen.flexbar-ai-dashboard.flexplugin
+          files: dist/*.flexplugin

@@ -13,6 +13,7 @@
     "plugin:debug": "flexcli plugin debug --uuid=com.aspen.flexbar-ai-dashboard",
     "plugin:validate": "flexcli plugin validate --path com.aspen.flexbar-ai-dashboard.plugin",
     "plugin:pack": "flexcli plugin pack --path com.aspen.flexbar-ai-dashboard.plugin",
+    "release:pack": "node scripts/pack-release.cjs",
     "plugin:install": "flexcli plugin install --path ./com.aspen.flexbar-ai-dashboard.flexplugin --force"
   },
   "engines": {

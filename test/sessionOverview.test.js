@@ -638,7 +638,10 @@ test("keys saved with the removed Claude data source show Codex data", async () 
     phases: [{
       at: 0,
       sessions: [{ id: "a", title: "Codex task", agoMs: 1_000, state: "tool" }],
-      quota: { limits: [{ label: "primary", usedPercent: 25, resetAt: 1778696068, windowSeconds: 18000 }] },
+      quota: { limits: [
+        { label: "primary", usedPercent: 90, resetAt: 1778696068, windowSeconds: 18000 },
+        { label: "secondary", usedPercent: 25, resetAt: 1779189630, windowSeconds: 604800 },
+      ] },
     }],
     taps: [400],
     endAt: 800,
@@ -646,7 +649,7 @@ test("keys saved with the removed Claude data source show Codex data", async () 
 
   assert.deepEqual([...new Set(distinct)], [
     "session:{\"title\":\"Codex task\"}",
-    "plan:[[\"5h\",75]]",
+    "plan:[[\"Weekly\",75]]",
     "overview:[[\"Codex task\",\"blue\"]]",
   ]);
 });

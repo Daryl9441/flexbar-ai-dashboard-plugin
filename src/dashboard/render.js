@@ -119,52 +119,43 @@ function renderPlanUsageKey(view, options = {}) {
   const now = Number.isFinite(options.now) ? options.now : Date.now();
   return renderKey(options, (ctx, width, canvasModule) => {
     drawBackground(ctx, width);
-    drawHeader(ctx, view.title || t(language, "planUsageTitle"), width, canvasModule);
-
-    const items = Array.isArray(view.items) ? view.items.slice(0, 2) : [];
-    if (items.length === 0) {
+    const item = Array.isArray(view.items) ? view.items[0] : null;
+    if (!item) {
+      drawHeader(ctx, view.title || t(language, "planUsageTitle"), width, canvasModule);
       drawText(ctx, t(language, "unavailable"), width / 2, 39, {
-        font: fontSpec("bold", 22),
-        align: "center",
-        color: "#f4f4f5",
-        maxWidth: width - 20,
+        font: fontSpec("bold", 22), align: "center", maxWidth: width - 20,
       });
       return;
     }
 
-    const percentWidth = 44;
-    const percentGap = 8;
-    const percentRight = width - 8;
-    // The label column fits the widest label (e.g. "Monthly"), within limits.
-    ctx.font = fontSpec("normal", 11);
-    const widestLabel = Math.max(...items.map((item) => ctx.measureText(String(item.label || "")).width));
-    const labelWidth = Math.min(72, Math.max(42, Math.ceil(widestLabel) + 4));
-    const barX = 10 + labelWidth;
-    const barWidth = percentRight - percentWidth - percentGap - barX;
-    const showBar = barWidth >= 32;
-    items.forEach((item, index) => {
-      const y = 20 + index * 21;
-      drawText(ctx, item.label, 10, y + 8, {
-        font: fontSpec("normal", 11),
-        color: "#f4f4f5",
-        maxWidth: labelWidth - 2,
-      });
-      if (showBar) {
-        drawRoundedRect(ctx, barX, y, barWidth, 7, 3, "#27272a");
-        drawRoundedRect(ctx, barX, y, Math.round(barWidth * (item.remainingPercent / 100)), 7, 3, quotaColor(item.remainingPercent));
-      }
-      drawText(ctx, `${item.remainingPercent}%`, percentRight, y + 8, {
-        font: fontSpec("bold", 12),
-        align: "right",
-        color: "#f4f4f5",
-        maxWidth: percentWidth,
-      });
-      drawText(ctx, planResetLabel(item.resetAtMs, now, language), 10, y + 17, {
-        font: fontSpec("normal", 9),
-        color: "#a1a1aa",
-        maxWidth: width - 18,
-      });
+    // The weekly reset owns the first row. Keep its full date ahead of the mark
+    // on narrow keys, and leave all other content below this row.
+    const resetText = planResetLabel(item.resetAtMs, now, language);
+    const markedX = HEADER_MARK.x + HEADER_MARK.size + HEADER_MARK.gap;
+    ctx.font = fontSpec("normal", 8);
+    const markFits = ctx.measureText(resetText).width <= width - markedX - 8;
+    const marked = markFits && drawMark(ctx, HEADER_MARK.x, HEADER_MARK.y, HEADER_MARK.size, canvasModule);
+    const resetX = marked ? markedX : HEADER_MARK.x;
+    const resetWidth = width - resetX - 8;
+    const resetFont = largestFittingFontSize(ctx, resetText, "normal", 11, 8, resetWidth);
+    drawText(ctx, resetText, resetX, HEADER_LABEL_Y, {
+      font: fontSpec("normal", resetFont), color: "#d4d4d8", maxWidth: resetWidth,
     });
+    const remaining = clampPercent(item.remainingPercent);
+    const available = width - 20;
+    const label = `${item.label} ${t(language, "planRemaining")}`;
+    drawText(ctx, label, width / 2, 27, {
+      font: fontSpec("normal", largestFittingFontSize(ctx, label, "normal", 10, 8, available)),
+      align: "center", color: "#a1a1aa", maxWidth: available,
+    });
+    drawText(ctx, `${remaining}%`, width / 2, 46, {
+      font: fontSpec("bold", largestFittingFontSize(ctx, `${remaining}%`, "bold", 23, 14, available)),
+      align: "center", maxWidth: available,
+    });
+    drawRoundedRect(ctx, 10, 52, available, 5, 2, "#27272a");
+    if (remaining > 0) {
+      drawRoundedRect(ctx, 10, 52, Math.round(available * remaining / 100), 5, 2, quotaColor(remaining));
+    }
   });
 }
 

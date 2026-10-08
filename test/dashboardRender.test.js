@@ -66,7 +66,7 @@ test("dashboard renderer creates PNG data URLs at dynamic key width and fixed 60
   const tokenImage = renderTokenUsageKey({ title: "Tokens", label: "123.4k" }, { width: 320, canvasModule: fake });
   const planImage = renderPlanUsageKey({
     title: "Plan",
-    items: [{ label: "5h", remainingPercent: 92, usedPercent: 8 }],
+    items: [{ label: "Weekly", remainingPercent: 92, usedPercent: 8 }],
   }, { width: 280, canvasModule: fake });
   const sessionImage = renderSessionKey({
     title: "A very long session title that needs truncation",
@@ -104,7 +104,7 @@ test("plan usage bars change color by remaining quota, not row position", () => 
   for (const remainingPercent of [80, 30, 8]) {
     renderPlanUsageKey({
       title: "Plan",
-      items: [{ label: "5h", remainingPercent, usedPercent: 100 - remainingPercent }],
+      items: [{ label: "Weekly", remainingPercent, usedPercent: 100 - remainingPercent }],
     }, { width: 320, canvasModule: fake });
   }
 
@@ -120,16 +120,16 @@ test("plan usage percent labels sit outside progress bars", () => {
 
   renderPlanUsageKey({
     title: "Plan",
-    items: [{ label: "5h", remainingPercent: 92, usedPercent: 8 }],
+    items: [{ label: "Weekly", remainingPercent: 92, usedPercent: 8 }],
   }, { width: 280, canvasModule: fake });
 
   const percent = fake.textDraws.find((text) => text.text === "92%");
-  const bar = fake.roundedRects.find((rect) => rect.color === "#27272a" && rect.y === 20);
+  const bar = fake.roundedRects.find((rect) => rect.color === "#27272a" && rect.y === 52);
 
   assert.ok(bar);
   assert.ok(percent);
-  const percentLeft = percent.x - fake.measureTextWidth(percent.text);
-  assert.ok(percentLeft > bar.x + bar.width);
+  assert.ok(percent.y < bar.y, "percentage is above the bar");
+  assert.equal(percent.align, "center");
 });
 
 test("reset timer renders a depleting ring and compact remaining time per window", () => {
@@ -193,16 +193,18 @@ test("new session key localizes the default project hint", () => {
   assert.ok(fake.texts.includes("\u5e94\u7528\u5f53\u524d\u9879\u76ee"));
 });
 
-test("plan usage label column widens to fit long labels such as Monthly", () => {
-  const narrow = createFakeCanvasModule();
-  renderPlanUsageKey({ items: [{ label: "5h", remainingPercent: 60 }] }, { width: 280, canvasModule: narrow });
-  const wide = createFakeCanvasModule();
-  renderPlanUsageKey({ items: [{ label: "Monthly", remainingPercent: 60 }] }, { width: 280, canvasModule: wide });
-
-  const barX = (fake) => Math.min(...fake.roundedRects.map((rect) => rect.x));
-  assert.equal(barX(narrow), 52, "short labels keep the original layout");
-  assert.ok(barX(wide) >= 10 + "Monthly".length * 8, "the bar starts after the full label");
-  assert.ok(wide.texts.includes("Monthly"), "not truncated");
+test("weekly quota labels and percentages remain clear above the full-width bar", () => {
+  for (const width of [120, 240, 300]) {
+    const fake = createFakeCanvasModule();
+    renderPlanUsageKey({ items: [{ label: "Weekly", remainingPercent: 60 }] }, { width, canvasModule: fake });
+    const label = fake.textDraws.find(draw => draw.text === "Weekly left");
+    const percent = fake.textDraws.find(draw => draw.text === "60%");
+    const bar = fake.roundedRects.find(rect => rect.color === "#27272a");
+    assert.ok(label);
+    assert.ok(percent.y > label.y && percent.y < bar.y);
+    assert.equal(bar.x, 10);
+    assert.equal(bar.width, width - 20);
+  }
 });
 
 test("reset timer still counts down a window of unknown length, without a progress arc", () => {
@@ -332,7 +334,7 @@ test("keys with a header label draw the OpenAI mark left of it and move the labe
       label: "850",
       recent: [{ value: 850, intensity: 40 }],
     }, options), "Recent usage"],
-    ["plan usage", (options) => renderPlanUsageKey({ title: "Plan", items: [{ label: "5h", remainingPercent: 60 }] }, options), "Plan"],
+    ["plan usage", (options) => renderPlanUsageKey({ title: "Plan", items: [{ label: "Weekly", remainingPercent: 60 }] }, options), "Resets —"],
     ["skill", (options) => renderSkillKey({ title: "diagnose" }, options), "Skill"],
   ];
   for (const [name, render, label] of cases) {
@@ -594,7 +596,7 @@ test("real canvas: the mark's pixels are drawn on every Codex key and nothing el
   const cases = [
     ["token", renderTokenUsageKey({ label: "123.4k" }, { width: 240, canvasModule }), HEADER_MARK, 2],
     ["token chart", renderTokenUsageKey({ mode: "recentChart", label: "850", recent: [{ value: 850, intensity: 90 }] }, { width: 240, canvasModule }), HEADER_MARK, 2],
-    ["plan", renderPlanUsageKey({ items: [{ label: "5h", remainingPercent: 60 }] }, { width: 280, canvasModule }), HEADER_MARK, 2],
+    ["plan", renderPlanUsageKey({ items: [{ label: "Weekly", remainingPercent: 60 }] }, { width: 280, canvasModule }), HEADER_MARK, 2],
     ["skill", renderSkillKey({}, { width: 240, canvasModule }), HEADER_MARK, 2],
     ["session", sessionImage, SESSION_MARK, 2],
     ["reset 200", renderResetTimerKey({ items: RESET_ITEMS }, { width: 200, now: NOW, canvasModule }), HEADER_MARK, 2],
@@ -834,18 +836,18 @@ function createFakeCanvasModule(options = {}) {
   return module;
 }
 
-test("plan usage shows each window's reset in local time with the correct quota", () => {
+test("plan usage shows the weekly reset on the first row in local time", () => {
   const fake = createFakeCanvasModule();
   const now = new Date(2026, 9, 8, 12, 0).getTime();
   renderPlanUsageKey({ items: [
-    { label: "5h", remainingPercent: 92, resetAtMs: new Date(2026, 9, 8, 16, 5).getTime() },
     { label: "Weekly", remainingPercent: 65, resetAtMs: new Date(2026, 9, 12, 9, 30).getTime() },
   ] }, { width: 280, now, canvasModule: fake });
-  for (const text of ["92%", "65%", "Resets 10/08 16:05", "Resets 10/12 09:30"]) {
+  for (const text of ["65%", "Weekly left", "Resets 10/12 09:30"]) {
     assert.ok(fake.textDraws.some(draw => draw.text === text), text);
   }
-  const resets = fake.textDraws.filter(draw => draw.text.startsWith("Resets"));
-  assert.deepEqual(resets.map(draw => draw.y), [37, 58]);
+  const reset = fake.textDraws.find(draw => draw.text.startsWith("Resets"));
+  assert.equal(reset.y, 13);
+  assert.ok(fake.textDraws.every(draw => draw === reset || draw.y > reset.y));
 });
 
 test("plan usage distinguishes missing, invalid and elapsed reset times in both languages", () => {
@@ -853,7 +855,7 @@ test("plan usage distinguishes missing, invalid and elapsed reset times in both 
   for (const language of ["en", "zh-CN"]) {
     for (const resetAtMs of [undefined, null, NaN, 0, 1e100, now, now - 1]) {
       const fake = createFakeCanvasModule();
-      renderPlanUsageKey({ items: [{ label: "5h", remainingPercent: 60, resetAtMs }] }, { width: 240, now, language, canvasModule: fake });
+      renderPlanUsageKey({ items: [{ label: "Weekly", remainingPercent: 60, resetAtMs }] }, { width: 240, now, language, canvasModule: fake });
       const past = resetAtMs === now || resetAtMs === now - 1;
       const expected = language === "en" ? (past ? "Reset pending" : "Resets —") : (past ? "等待刷新" : "重置 —");
       assert.ok(fake.textDraws.some(draw => draw.text === expected), `${language}: ${resetAtMs}`);
@@ -865,14 +867,15 @@ test("plan usage reset labels stay inside narrow keys and show the year across N
   const now = new Date(2026, 11, 31, 12).getTime();
   for (const width of [120, 150, 200, 280]) {
     const fake = createFakeCanvasModule();
-    renderPlanUsageKey({ items: [{ label: "Monthly", remainingPercent: 100, resetAtMs: new Date(2027, 0, 1, 8).getTime() }] }, { width, now, canvasModule: fake });
+    renderPlanUsageKey({ items: [{ label: "Weekly", remainingPercent: 100, resetAtMs: new Date(2027, 0, 1, 8).getTime() }] }, { width, now, canvasModule: fake });
     assert.ok(fake.textDraws.some(draw => draw.text === "100%"));
     const reset = fake.textDraws.find(draw => draw.text.startsWith("Resets"));
     assert.ok(reset);
     assert.ok(reset.x + fake.measureTextWidth(reset.text) <= width - 8);
     if (width >= 280) assert.equal(reset.text, "Resets 2027/01/01 08:00");
     for (const bar of fake.roundedRects.filter(rect => rect.color === "#27272a")) {
-      assert.ok(bar.x + bar.width < width - 52, "bar does not overlap the percentage");
+      assert.ok(bar.x + bar.width <= width - 10, "bar stays inside the key");
+      assert.ok(bar.y > fake.textDraws.find(draw => draw.text === "100%").y);
     }
   }
 });

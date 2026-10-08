@@ -427,7 +427,10 @@ function buildPlanUsageView(snapshot, language) {
 }
 
 function quotaItems(quota, language) {
-  return dedupeQuotaLimits(extractQuotaLimits(quota)).map((limit) => {
+  // Plan Usage shows only the weekly bucket; never substitute a short window.
+  const weekly = dedupeQuotaLimits(extractQuotaLimits(quota)).filter((limit) =>
+    limit.windowSeconds === 7 * 86400 && quotaUsagePercent(limit.usedPercent) !== null);
+  return weekly.map((limit) => {
     const usedPercent = clampPercent(limit.usedPercent);
     return {
       label: quotaWindowLabel(limit.windowSeconds, language),
@@ -523,11 +526,30 @@ function dedupeQuotaLimits(limits) {
     const windowSeconds = limit.windowSeconds || lengthByName.get(label) || null;
     const key = windowSeconds ? `w:${windowSeconds}` : `n:${label}`;
     const existing = byWindow.get(key);
-    if (!existing || Number(limit.usedPercent || 0) > Number(existing.usedPercent || 0)) {
-      byWindow.set(key, { ...limit, label, windowSeconds });
+    const usage = quotaUsagePercent(limit.usedPercent);
+    const existingUsage = existing ? quotaUsagePercent(existing.usedPercent) : null;
+    const candidate = { ...limit, label, windowSeconds };
+    const preferCandidate = !existing || (usage !== null && (existingUsage === null || usage > existingUsage));
+    const selected = preferCandidate ? candidate : existing;
+    const other = preferCandidate ? existing : candidate;
+    // Complementary copies can provide the usage and reset separately.
+    if (!validQuotaReset(selected.resetAt) && other && validQuotaReset(other.resetAt)) {
+      selected.resetAt = other.resetAt;
     }
+    byWindow.set(key, selected);
   }
   return Array.from(byWindow.values()).sort((a, b) => (a.windowSeconds || Infinity) - (b.windowSeconds || Infinity));
+}
+
+function validQuotaReset(value) {
+  const ms = toEpochMs(value);
+  return Number.isFinite(ms) && ms > 0 && Number.isFinite(new Date(ms).getTime());
+}
+
+function quotaUsagePercent(value) {
+  if (typeof value !== "number" && !(typeof value === "string" && value.trim())) return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
 }
 
 function canonicalQuotaLabel(label) {

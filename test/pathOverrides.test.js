@@ -74,8 +74,9 @@ test("path defaults describe auto-detected resolved values", () => {
 });
 
 test("normalizePluginConfig fills missing override keys", () => {
-  assert.deepEqual(normalizePluginConfig({}), { pathOverrides: { CODEX_HOME: "" } });
+  assert.deepEqual(normalizePluginConfig({}), { dotsStatusSource: "auto", pathOverrides: { CODEX_HOME: "" } });
   assert.deepEqual(normalizePluginConfig({ pathOverrides: { CODEX_HOME: "/tmp/codex" } }), {
+    dotsStatusSource: "auto",
     pathOverrides: { CODEX_HOME: "/tmp/codex" },
   });
 });
@@ -90,11 +91,11 @@ test("normalizePluginConfig silently drops settings saved by older versions", ()
       FLEXBAR_AI_CLAUDE_EVENTS: "/tmp/flexbar-ai-dashboard/claude-events.jsonl",
     },
   };
-  const expected = { pathOverrides: { CODEX_HOME: "/tmp/codex" } };
+  const expected = { dotsStatusSource: "auto", pathOverrides: { CODEX_HOME: "/tmp/codex" } };
 
   assert.deepEqual(normalizePluginConfig(legacy), expected);
   assert.deepEqual(normalizePluginConfig({ uuid: "com.aspen.flexbar-ai-dashboard", config: legacy }), expected);
-  assert.deepEqual(normalizePluginConfig({ overwriteStatusLine: false }), { pathOverrides: { CODEX_HOME: "" } });
+  assert.deepEqual(normalizePluginConfig({ overwriteStatusLine: false }), { dotsStatusSource: "auto", pathOverrides: { CODEX_HOME: "" } });
 
   const env = envWithPathOverrides(legacy, { HOME: "/tmp/flexbar-home" });
   assert.equal(env.CODEX_HOME, "/tmp/codex");

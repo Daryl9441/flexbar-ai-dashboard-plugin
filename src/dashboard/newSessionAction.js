@@ -130,5 +130,6 @@ module.exports = {
   normalizeCodexAppMode,
   openNewCodexSession,
   projectLabel,
+  runCommand,
   validateProjectPath,
 };

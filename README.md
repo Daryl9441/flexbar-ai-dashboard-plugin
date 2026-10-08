@@ -2,7 +2,7 @@
 
 ![Flexbar AI Dashboard screenshot](assets/Flexbar-7C3502BA2010-screenshot-2026-05-14T06-12-46-108Z.jpg)
 
-Flexbar AI Dashboard is a FlexDesigner v1 plugin that shows local Codex activity on Flexbar keys: session status, upcoming scheduled tasks, token usage, plan usage windows, and skill shortcuts.
+Flexbar AI Dashboard is a FlexDesigner v1 plugin that shows local Codex activity on Flexbar keys: session status, upcoming scheduled tasks, token usage, plan usage windows, skill shortcuts, and the state of your ChatGPT dots.
 
 It is built for development workflows that use Codex. You can see which sessions are running, which tool Codex just used, recent token consumption, and remaining plan quota without switching back to the terminal or the ChatGPT app.
 
@@ -13,10 +13,11 @@ It is built for development workflows that use Codex. You can see which sessions
 - Plan usage: reads rate limits from `codex app-server` when available; otherwise uses the OAuth token in `$CODEX_HOME/auth.json` to query the ChatGPT usage endpoint.
 - Skill shortcuts: reads `SKILL.md` files from `$CODEX_HOME/skills` and `$CODEX_HOME/plugins/cache`.
 - Scheduled tasks: reads the `automations` table that the ChatGPT desktop app keeps in `$CODEX_HOME/sqlite/*.db`, read-only (see [Scheduled tasks](#scheduled-tasks--定时任务)).
+- ChatGPT Dots: asks chatgpt.com for your dots' status with read-only GET requests and the `auth.json` token, through the system proxy, and falls back to the ChatGPT app's local cache in `$CODEX_HOME/.codex-global-state.json`; with **Local cache only** on the settings page it reads only that cache (see [ChatGPT Dots](#chatgpt-dots--chatgpt-dots-按键)).
 
 The default `CODEX_HOME` is `~/.codex`. Override it with the `CODEX_HOME` environment variable, or on the settings page (see [Settings Page](#settings-page)).
 
-插件读取本地 Codex 数据；它自己发出的唯一网络请求，是在 `codex app-server` 未提供套餐额度时用 `auth.json` 中的 OAuth 令牌向 ChatGPT 查询用量。读取的数据包括：会话与当前活动（优先读取 `codex app-server`，否则读取 `$CODEX_HOME/sessions` 下的 JSONL 日志）、`token_count` 事件中的令牌用量、套餐额度（`codex app-server`，或用 `$CODEX_HOME/auth.json` 中的 OAuth 令牌查询 ChatGPT 用量接口）、`$CODEX_HOME/skills` 和 `$CODEX_HOME/plugins/cache` 中的技能，以及 ChatGPT 桌面应用在 `$CODEX_HOME/sqlite/*.db` 中保存的定时任务（只读）。`CODEX_HOME` 默认为 `~/.codex`，可通过同名环境变量或设置页覆盖。
+插件读取本地 Codex 数据；它自己发出的网络请求只有两类：在 `codex app-server` 未提供套餐额度时用 `auth.json` 中的 OAuth 令牌向 ChatGPT 查询用量，以及 ChatGPT Dots 按键的只读状态请求（走系统代理，可在设置页改为只读本地缓存，见 [ChatGPT Dots](#chatgpt-dots--chatgpt-dots-按键)）。读取的数据包括：会话与当前活动（优先读取 `codex app-server`，否则读取 `$CODEX_HOME/sessions` 下的 JSONL 日志）、`token_count` 事件中的令牌用量、套餐额度（`codex app-server`，或用 `$CODEX_HOME/auth.json` 中的 OAuth 令牌查询 ChatGPT 用量接口）、`$CODEX_HOME/skills` 和 `$CODEX_HOME/plugins/cache` 中的技能，ChatGPT 桌面应用在 `$CODEX_HOME/sqlite/*.db` 中保存的定时任务（只读），以及 ChatGPT Dots 的本地缓存 `$CODEX_HOME/.codex-global-state.json`（只读）。`CODEX_HOME` 默认为 `~/.codex`，可通过同名环境变量或设置页覆盖。
 
 ## Flexbar Keys
 
@@ -32,7 +33,8 @@ The default `CODEX_HOME` is `~/.codex`. Override it with the `CODEX_HOME` enviro
 - **Reset Timer**: counts down to the next reset of each Codex plan-usage window.
 - **New Codex Session**: opens a new thread in the ChatGPT desktop app (see below).
 - **AI Skill**: lets you select a Codex skill. Pressing the key pastes `Use the <skill> skill.` into the current input target.
-- **OpenAI icons / OpenAI 图标**: the key library, the keys and their config pages carry the OpenAI mark, so Codex / ChatGPT data is recognizable at a glance. In the key library each key is the white mark on a dark tile with a badge: blue list = AI Session, purple # = Token Usage, green bars = Plan Usage, blue clock = Reset Timer, green + = New Codex Session, yellow star = AI Skill. On the keys a small white mark sits left of the header label, in the same top-left spot on the Reset Timer, and left of the session title; on the all-sessions and scheduled-tasks views it leads the first row (or the "no sessions / tasks" message), and on New Codex Session the mark with its green + badge replaces the green circle. Where it would squeeze or touch the content it is left out: Reset Timer rings on a narrow key, a long token total, a session title under about 218px, all-sessions and scheduled-tasks grids that would lose a slot (a 240px key; the default 520px has room). A New Codex Session key under about 137px keeps the green circle, with the small mark left of its header. FlexDesigner draws the AI Skill key from its icon: until a skill is chosen it shows the OpenAI skill icon, also on keys placed with the old star; an icon you picked yourself stays. / 按键库、按键及其配置页都带有 OpenAI 标志，一眼可知显示的是 Codex / ChatGPT 数据。按键库中每个按键是深色底上的白色标志加角标：蓝色列表=AI 会话，紫色 #=令牌用量，绿色柱状=套餐用量，蓝色时钟=重置倒计时，绿色 +=新建 Codex 会话，黄色星形=AI 技能。按键上的白色小标志位于标题左侧（重置倒计时在同一左上角位置）和会话标题左侧；会话总览和定时任务视图中位于第一行（或「没有会话 / 任务」提示）左侧；新建 Codex 会话用带绿色 + 角标的标志代替原来的绿色圆形。标志会挤占或碰到内容时省略：按键较窄、会碰到重置倒计时圆环时，令牌总数很长时，会话按键窄于约 218 像素时，以及会话总览和定时任务视图会因此少显示条目时（240 像素按键；默认 520 像素有足够空间）。新建 Codex 会话按键窄于约 137 像素时保留绿色圆形，小标志位于标题左侧。AI 技能按键由 FlexDesigner 按其图标绘制：选择技能前显示 OpenAI 技能图标，旧版放置的星形图标也会替换；自行选择的图标保持不变。
+- **ChatGPT Dots**: shows the state of your ChatGPT dots and opens Dots in the ChatGPT app (see [ChatGPT Dots](#chatgpt-dots--chatgpt-dots-按键)).
+- **OpenAI icons / OpenAI 图标**: the key library, the keys and their config pages carry the OpenAI mark, so Codex / ChatGPT data is recognizable at a glance. In the key library each key is the white mark on a dark tile with a badge: blue list = AI Session, purple # = Token Usage, green bars = Plan Usage, blue clock = Reset Timer, green + = New Codex Session, yellow star = AI Skill, pink dots = ChatGPT Dots. On the keys a small white mark sits left of the header label, in the same top-left spot on the Reset Timer, and left of the session title; on the all-sessions and scheduled-tasks views it leads the first row (or the "no sessions / tasks" message), and on New Codex Session the mark with its green + badge replaces the green circle. Where it would squeeze or touch the content it is left out: Reset Timer rings on a narrow key, a long token total, a session title under about 218px, all-sessions and scheduled-tasks grids that would lose a slot (a 240px key; the default 520px has room). A New Codex Session key under about 137px keeps the green circle, with the small mark left of its header. FlexDesigner draws the AI Skill key from its icon: until a skill is chosen it shows the OpenAI skill icon, also on keys placed with the old star; an icon you picked yourself stays. / 按键库、按键及其配置页都带有 OpenAI 标志，一眼可知显示的是 Codex / ChatGPT 数据。按键库中每个按键是深色底上的白色标志加角标：蓝色列表=AI 会话，紫色 #=令牌用量，绿色柱状=套餐用量，蓝色时钟=重置倒计时，绿色 +=新建 Codex 会话，黄色星形=AI 技能，粉色三点=ChatGPT Dots。按键上的白色小标志位于标题左侧（重置倒计时在同一左上角位置）和会话标题左侧；会话总览和定时任务视图中位于第一行（或「没有会话 / 任务」提示）左侧；新建 Codex 会话用带绿色 + 角标的标志代替原来的绿色圆形。标志会挤占或碰到内容时省略：按键较窄、会碰到重置倒计时圆环时，令牌总数很长时，会话按键窄于约 218 像素时，以及会话总览和定时任务视图会因此少显示条目时（240 像素按键；默认 520 像素有足够空间）。新建 Codex 会话按键窄于约 137 像素时保留绿色圆形，小标志位于标题左侧。AI 技能按键由 FlexDesigner 按其图标绘制：选择技能前显示 OpenAI 技能图标，旧版放置的星形图标也会替换；自行选择的图标保持不变。
 
 The plugin includes English and Chinese UI strings and follows the host language where possible.
 
@@ -45,6 +47,37 @@ Pressing the key opens `codex://threads/new?mode=<codex|work|chat>[&path=<projec
 - **Starting prompt**: optional; it is only prefilled in the composer. Nothing is sent until you press send in the app.
 
 按下按键会通过 `codex://threads/new` 深链接在 ChatGPT 桌面应用中新建会话（需已安装 ChatGPT 桌面应用）。项目目录可选，首次使用某个目录时 ChatGPT 会弹出一次信任确认；起始提示词只会预填到输入框，不会自动发送。
+
+### ChatGPT Dots / ChatGPT Dots 按键
+
+The **ChatGPT Dots** key shows the state of your dots in the ChatGPT desktop app and opens Dots when pressed.
+
+- **What it shows**: the state that matters most across your available dots (status `active`; paused ones count too), in this order:
+  - **orange Safety pause**: a dot was paused out of precaution;
+  - **green Update**: a dot's room has something you have not read (unless that room is muted); `Update ×2` for two such dots;
+  - **blue Working**: one of the dot's recent activity entries is in progress (a paused dot may still run delegated tasks, so paused dots are checked too);
+  - **gray Paused** (pause bars), **gray Idle**;
+  - **gray No dot** (none yet: pressing the key starts the app's setup) or **Not available** (the backend says this account has no Dots).
+
+  With one dot the second line names it (turn off **Show the dot's name** on the key's config page to see its last check-in instead); with several it counts them. Keys narrower than about 137px show only the light and the state.
+- **Degraded**: a hollow light means the data is not a fresh answer from chatgpt.com, and the second line says why and how old it is: `Offline · Cache 5m`, `Sign-in expired · Cache 2h`, `Rate limited · 3m ago`, `Blocked` (an answer that is not JSON, such as a Cloudflare challenge). An answer older than 10 minutes is hollow too.
+- **Pressing**: opens `codex://dots` with `/usr/bin/open` (PowerShell `Start-Process` on Windows). It must be exactly that: the app ignores the link with a trailing slash or a query. The app shows its window, goes to Dots and opens your primary dot, or its setup when you have none. If the link cannot be opened, `https://chatgpt.com/dots` opens in the browser. Presses within 1.5 s count once; the status is read again 20 s and 90 s later.
+- **Network** (status source **Network + cache**, the default):
+  - Two read-only `GET` requests and nothing else: `https://chatgpt.com/backend-api/tbo?limit=25&include_room_preview=true` (your dots) and `https://chatgpt.com/backend-api/tbo/<id>/activity?limit=5` (one dot per round, taking turns). A fixed allowlist in `src/collectors/chatgptDots.js` refuses any other method, host or path, and `test/dotsSafety.test.js` checks that the Dots code never names a state-changing call (pause, resume, reboot, messages, read receipts).
+  - Signed in with the ChatGPT login in `$CODEX_HOME/auth.json`, the token the app and the CLI share (headers `Authorization` and `ChatGPT-Account-Id`). **The plugin never refreshes the token**: a refresh rotates the refresh token and could sign the app or the CLI out. An expired token (by its `exp`) is not sent at all; the key shows the cache until the app refreshes it.
+  - Through the proxy in `HTTPS_PROXY`, else the macOS system proxy (`scutil --proxy`, read at most once a minute), else directly. When the proxy cannot be reached or refuses the tunnel, the request goes direct once; a tunnel the proxy accepted and then dropped is not retried directly. Node's built-in proxy support (`https.Agent` with `proxyEnv`) does the tunnelling.
+  - About every 150 s (±10%, up to 300 s with many dots), one round at a time, at most 60 requests an hour. Network errors back off up to 15 minutes, `429` waits for `Retry-After`, a `401` before the token's expiry waits 30 minutes (or until the token changes). Nothing is sent while no Dots key is loaded or every Flexbar is unplugged.
+- **Local cache**: `$CODEX_HOME/.codex-global-state.json`, the app's own copy of your primary dot and its recent activity (its `.bak` when the file cannot be parsed). It is used until the first answer arrives, when a request fails and the app's data is newer than the key's last answer (otherwise the key keeps that answer: `Offline · 3m ago`), and in **Local cache only** mode (global settings page), which sends no request at all. The app updates it while it is in the foreground, so it can be old: the key always says `Cache <age>`, where the age is the newest Dots timestamp in the file (when the app picked or refreshed the dot, or the dot last changed), not the file's modification time, which changes with every unrelated setting; `Cache` alone when there is none. The cache holds only the primary dot and no unread information, so it never shows **Update**: in **Local cache only** mode the key cannot tell that a dot has something new.
+- **Privacy**: the logs record only the route (`system-proxy`, `env-proxy`, `direct`, `direct-fallback`), HTTP statuses, error categories, the number of dots and the shown state, once per change; never the token, the account id, dot ids, names or message previews. The key's config page shows only the state, its source and its time.
+- **Limitations**: the endpoints and the cache file are undocumented and may change with an app update. "Update" is approximate (the room's latest item may be your own message). Approval requests, failed tasks and scheduled runs are not shown yet.
+
+**ChatGPT Dots** 按键显示 ChatGPT 桌面应用中 dot 的状态，按下打开 Dots。按键在所有可用 dot（status 为 active，已暂停的也算）中按优先级显示最需要关注的状态：**橙色**=安全暂停；**绿色**=有新进展（dot 的房间里有未读内容，静音的房间除外，多个 dot 时显示「×n」）；**蓝色**=工作中（dot 最近的 activity 中有进行中的任务；已暂停的 dot 仍可能在运行委派任务，所以也会检查）；**灰色**=已暂停（暂停图形）、空闲、没有 dot（按下进入应用的创建流程）或 Dots 不可用（后端返回该账号没有 Dots）。只有一个 dot 时第二行显示它的名称（可在按键配置页关闭 **Show the dot's name**，改为显示签到时间），有多个时显示数量；窄于约 137 像素的按键只显示状态灯和状态。空心状态灯表示数据不是 chatgpt.com 的最新结果，第二行写明原因和数据时间，如「离线 · 缓存 5分钟」「登录过期 · 缓存 2小时」「限流 · 3分钟前」「网络被拦截」（返回的不是 JSON，例如 Cloudflare 验证页）；超过 10 分钟的结果也显示为空心。
+
+按下时用 `/usr/bin/open` 打开 `codex://dots`（Windows 上用 PowerShell `Start-Process`）。链接必须一字不差，带尾斜杠或参数都会被应用忽略。应用会显示窗口、进入 Dots 并打开 primary dot，没有 dot 时进入创建流程；无法打开时改为在浏览器中打开 `https://chatgpt.com/dots`。1.5 秒内的重复按下只算一次，按下后 20 秒和 90 秒各刷新一次状态。
+
+联网（全局设置页的状态来源为默认的 **Network + cache** 时）：只发两种只读 `GET` 请求：`https://chatgpt.com/backend-api/tbo?limit=25&include_room_preview=true`（dot 列表）和 `https://chatgpt.com/backend-api/tbo/<id>/activity?limit=5`（每轮一个 dot，轮流）。`src/collectors/chatgptDots.js` 中写死的白名单拒绝其他任何方法、主机和路径，`test/dotsSafety.test.js` 检查 Dots 代码中不出现任何会改变状态的调用（暂停、恢复、重启、发消息、标记已读）。请求使用 `$CODEX_HOME/auth.json` 中的 ChatGPT 登录，即应用和 CLI 共用的令牌（请求头为 `Authorization` 和 `ChatGPT-Account-Id`）。**插件绝不刷新令牌**：刷新会轮换 refresh token，可能让应用或 CLI 掉线；令牌按 `exp` 已过期时不发请求，按键改为显示缓存，直到应用刷新令牌。请求优先走 `HTTPS_PROXY` 指定的代理，其次是 macOS 系统代理（`scutil --proxy`，最多每分钟读取一次），都没有时直连；代理连不上或拒绝建立隧道时，该请求直连重试一次；代理已接受隧道、之后才断开的，不改走直连。隧道由 Node 内置的代理支持（`https.Agent` 的 `proxyEnv`）完成。约每 150 秒一轮（±10%，dot 多时最长 300 秒），同一时间只有一轮，每小时最多 60 次请求；网络错误时指数退避，最长 15 分钟；`429` 按 `Retry-After` 等待；令牌未过期却返回 `401` 时等待 30 分钟（或直到令牌变化）。没有 Dots 按键或所有 Flexbar 都断开时不发请求。
+
+本地缓存是 `$CODEX_HOME/.codex-global-state.json`，即应用自己保存的 primary dot 及其最近 activity（文件无法解析时读 `.bak`）。在第一次结果返回前、请求失败且应用的数据比按键上一次的结果更新时（否则按键继续显示上一次的结果，如「离线 · 3分钟前」），以及在全局设置页选择 **Local cache only** 时使用；**Local cache only** 完全不联网。应用只在前台时更新这个文件，数据可能较旧，所以按键始终标注「缓存 <时长>」：时长取文件里最新的 Dots 时间戳（应用选中或刷新 dot 的时间，或 dot 最后变化的时间），而不是文件的修改时间，因为任何无关设置变化都会重写文件；没有时间戳时只标「缓存」。缓存里只有 primary dot，也没有未读信息，所以永远不会显示「有新进展」：**Local cache only** 模式下按键无法发现 dot 的新进展。日志只在变化时记录路由类型（`system-proxy`、`env-proxy`、`direct`、`direct-fallback`）、HTTP 状态码、错误类别、dot 数量和显示的状态，绝不记录令牌、账号 ID、dot ID、名称或消息预览；按键配置页只显示状态、数据来源和时间。限制：这些接口和缓存文件都未公开，应用更新后可能变化；「有新进展」是近似判断（房间里最新的一条可能是你自己发的消息）；暂不显示待审批、失败任务和定时运行。
 
 ### Scheduled tasks / 定时任务
 
@@ -164,10 +197,10 @@ npm run build
 npm test
 npm run doctor
 npm run plugin:validate
-npm run icons    # re-render the 7 OpenAI icons in manifest.json (after changing src/dashboard/openaiLogo.js; see below for the config pages)
+npm run icons    # re-render the 8 OpenAI icons in manifest.json (after changing src/dashboard/openaiLogo.js; see below for the config pages)
 ```
 
-`npm run icons` (`scripts/generate-icons.cjs --write`) replaces only the `icon` values of `keyLibrary.style` and of each key; every other byte of `manifest.json` stays. Without `--write` (`node scripts/generate-icons.cjs`) it only reports whether the icons are current; `test/openaiLogo.test.js` fails while they are not. The 7 config pages in `ui/*.vue` embed the same logo path and badge colours inline (a page cannot import `src/`), so after changing `src/dashboard/openaiLogo.js` update them by hand too; `test/keyConfigPages.test.js` checks that they match. / `npm run icons` 只替换 `manifest.json` 中插件和各按键的 `icon` 值；不加 `--write` 时只报告图标是否为最新，图标过期时 `test/openaiLogo.test.js` 会失败。`ui/*.vue` 中的 7 个配置页内联了相同的标志路径和角标颜色（配置页无法引用 `src/`），修改 `src/dashboard/openaiLogo.js` 后也需手动更新它们，`test/keyConfigPages.test.js` 会检查是否一致。
+`npm run icons` (`scripts/generate-icons.cjs --write`) replaces only the `icon` values of `keyLibrary.style` and of each key; every other byte of `manifest.json` stays. Without `--write` (`node scripts/generate-icons.cjs`) it only reports whether the icons are current; `test/openaiLogo.test.js` fails while they are not. The 8 config pages in `ui/*.vue` embed the same logo path and badge colours inline (a page cannot import `src/`), so after changing `src/dashboard/openaiLogo.js` update them by hand too; `test/keyConfigPages.test.js` checks that they match. / `npm run icons` 只替换 `manifest.json` 中插件和各按键的 `icon` 值；不加 `--write` 时只报告图标是否为最新，图标过期时 `test/openaiLogo.test.js` 会失败。`ui/*.vue` 中的 8 个配置页内联了相同的标志路径和角标颜色（配置页无法引用 `src/`），修改 `src/dashboard/openaiLogo.js` 后也需手动更新它们，`test/keyConfigPages.test.js` 会检查是否一致。
 
 If `npm` is not available in the current shell, run the underlying commands directly:
 
@@ -184,6 +217,7 @@ Maintenance map:
 - OpenAI mark, key-library icons and `scripts/generate-icons.cjs`: `test/openaiLogo.test.js`; the AI Skill key's default icon: `test/skillKey.test.js`.
 - AI Session tap cycle and session overview: `test/sessionOverview.test.js` (runs `src/plugin.js` against a fake FlexDesigner host).
 - Scheduled tasks: `test/codexAutomations.test.js` (collector) and `test/automationOverview.test.js` (view model, next-run labels, renderer, snapshot). The tests that build a SQLite database need `node:sqlite` (Node.js 22.13+, or 22.5+ with `--experimental-sqlite`); on older versions they are skipped.
+- ChatGPT Dots: `test/dotsView.test.js` (states and their priority), `test/dotsRender.test.js`, `test/chatgptDots.test.js` (allowlist, headers, error categories), `test/dotsPoller.test.js` (schedule, budget, backoff), `test/dotsLocalCache.test.js`, `test/dotsAuth.test.js`, `test/systemProxy.test.js`, `test/httpsGetJson.test.js`, `test/dotsAction.test.js`, `test/dotsKey.test.js`, `test/dotsKeyIntegration.test.js` (runs `src/plugin.js` against a fake FlexDesigner host) and `test/dotsSafety.test.js` (read-only guards).
 - Flexbar config page changes: update `test/keyConfigPages.test.js`.
 - Settings page, Codex status and path override changes: update `test/globalConfigPage.test.js`, `test/setupStatus.test.js` and `test/pathOverrides.test.js`.
 
@@ -202,11 +236,13 @@ npm run check:privacy   # tracked files + unpushed commits; also --staged, --tra
 
 ## Settings Page
 
-The plugin's global config page lists the local Codex data the keys rely on: the Codex home, its `auth.json` (used for plan usage) and its `sessions` directory. **Refresh** checks them again. The plugin installs nothing and never writes to Codex data; reading the scheduled tasks may leave SQLite's usual `-shm` / `-wal` sidecar files next to the ChatGPT app's database.
+The plugin's global config page lists the local Codex data the keys rely on: the Codex home, its `auth.json` (used for plan usage and the Dots status) and its `sessions` directory. **Refresh** checks them again. The plugin installs nothing and never writes to Codex data; reading the scheduled tasks may leave SQLite's usual `-shm` / `-wal` sidecar files next to the ChatGPT app's database.
 
 The **Path overrides** section supports an optional override for `CODEX_HOME`. Click **Apply path overrides** to save it into the plugin `config.json` through FlexDesigner (`$fd.setConfig`) after backend validation. On plugin startup the backend reads `config.json` from the plugin directory before resolving Codex paths, so the override survives restarts even before the settings UI opens. The Codex home must be an existing directory. Leave the field blank to keep auto-detection from the current environment; its placeholder shows the resolved default path.
 
-设置页列出按键依赖的本地 Codex 数据：Codex 主目录、其中的 `auth.json`（用于套餐用量）和 `sessions` 目录，**Refresh** 会重新检查。插件不安装任何内容，也不写入 Codex 数据；读取定时任务时，SQLite 可能会在 ChatGPT 应用的数据库旁留下常见的 `-shm` / `-wal` 辅助文件。**Path overrides** 中可选择覆盖 `CODEX_HOME`：点击 **Apply path overrides**，经后端校验后通过 FlexDesigner 保存到插件目录的 `config.json`，重启后依然生效。该路径必须是已存在的目录；留空则按当前环境自动检测，输入框的占位符显示检测到的默认路径。
+**ChatGPT Dots status** picks where the ChatGPT Dots key reads its status, for the whole plugin: **Network + cache** (the default: read-only requests to chatgpt.com, see [ChatGPT Dots](#chatgpt-dots--chatgpt-dots-按键)) or **Local cache only** (no network; only the ChatGPT app's local cache, which cannot show **Update**). The choice is saved as soon as you pick it.
+
+设置页列出按键依赖的本地 Codex 数据：Codex 主目录、其中的 `auth.json`（用于套餐用量和 Dots 状态）和 `sessions` 目录，**Refresh** 会重新检查。插件不安装任何内容，也不写入 Codex 数据；读取定时任务时，SQLite 可能会在 ChatGPT 应用的数据库旁留下常见的 `-shm` / `-wal` 辅助文件。**Path overrides** 中可选择覆盖 `CODEX_HOME`：点击 **Apply path overrides**，经后端校验后通过 FlexDesigner 保存到插件目录的 `config.json`，重启后依然生效。该路径必须是已存在的目录；留空则按当前环境自动检测，输入框的占位符显示检测到的默认路径。**ChatGPT Dots status** 设置 ChatGPT Dots 按键的状态来源，对整个插件生效：**Network + cache**（默认，向 chatgpt.com 发只读请求，见 [ChatGPT Dots](#chatgpt-dots--chatgpt-dots-按键)）或 **Local cache only**（不联网，只读 ChatGPT 应用的本地缓存，无法显示「有新进展」）。选择后立即保存。
 
 ### Upgrading from a version with Claude Code support / 从支持 Claude Code 的旧版本升级
 
@@ -285,9 +321,12 @@ Releases: pushing a `v*` tag runs `.github/workflows/release.yml`, which calls `
 ```text
 src/
   collectors/      Codex sessions, usage, skills, scheduled tasks (ChatGPT app
-                   SQLite, read-only) and settings-page status
+                   SQLite, read-only), ChatGPT Dots status (read-only requests,
+                   app cache, poller) and settings-page status
   dashboard/       view models, rendering, OpenAI mark and icons, AI Session tap
-                   cycle, and config event parsing
+                   cycle, ChatGPT Dots key, and config event parsing
+  net/             proxy route (HTTPS_PROXY, macOS system proxy) and the one
+                   HTTPS GET helper used by the Dots status
   prototype/       CLI snapshots and debug formatting
 
 com.aspen.flexbar-ai-dashboard.plugin/
@@ -303,6 +342,6 @@ test/              Node test runner tests
 
 ## Notes
 
-- The plugin reads local Codex data and does not upload session logs. The only network request it sends itself is the plan-usage query to ChatGPT with the `auth.json` token, when `codex app-server` does not report the rate limits (see [Codex Data](#codex-data)).
+- The plugin reads local Codex data and does not upload session logs. The network requests it sends itself are the plan-usage query to ChatGPT with the `auth.json` token, when `codex app-server` does not report the rate limits (see [Codex Data](#codex-data)), and, while a ChatGPT Dots key is loaded, the read-only Dots status requests (see [ChatGPT Dots](#chatgpt-dots--chatgpt-dots-按键)); **Local cache only** on the settings page turns the latter off.
 - The ChatGPT app's scheduled-task database is only ever opened read-only.
-- The Codex OAuth token is used locally only for reading plan usage. Tests cover that the token is not exposed.
+- The Codex OAuth token is used locally only for reading plan usage and the Dots status, and is never refreshed by the plugin. Tests cover that the token is not exposed.

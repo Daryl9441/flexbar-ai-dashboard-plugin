@@ -54,6 +54,7 @@ const ICON_BADGES = Object.freeze({
   reset: badge("#38bdf8", "clock", drawClockGlyph),
   newSession: badge("#22c55e", "plus", drawPlusGlyph),
   skill: badge("#facc15", "star", drawStarGlyph),
+  dots: badge("#f472b6", "dots", drawDotsGlyph),
 });
 
 /**
@@ -68,6 +69,7 @@ const ICON_SPECS = Object.freeze({
   [`${PLUGIN_UUID}.reset-timer`]: "reset",
   [`${PLUGIN_UUID}.new-session`]: "newSession",
   [`${PLUGIN_UUID}.skill`]: "skill",
+  [`${PLUGIN_UUID}.dots`]: "dots",
 });
 
 // Canvas module -> its parsed Path2D of the logo, so the path string is parsed once per module.
@@ -285,6 +287,11 @@ function drawStarGlyph(ctx, cx, cy, r) {
   ctx.quadraticCurveTo(cx - inner, cy - inner, cx, cy - outer);
   ctx.closePath();
   ctx.fill();
+}
+
+// Three dots in a row: ChatGPT Dots.
+function drawDotsGlyph(ctx, cx, cy, r) {
+  for (const offset of [-0.5, 0, 0.5]) fillCircle(ctx, cx + offset * r, cy, 0.2 * r, GLYPH_COLOR);
 }
 
 module.exports = {

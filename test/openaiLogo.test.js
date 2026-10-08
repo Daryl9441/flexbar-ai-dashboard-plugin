@@ -140,6 +140,30 @@ test("renderOpenAiIcon returns PNG data URIs of the requested size, with and wit
   }
 });
 
+test("the Dots badge is three dark dots on a color no other key uses", () => {
+  const dots = ICON_BADGES.dots;
+  assert.equal(dots.glyph, "dots");
+  const others = Object.entries(ICON_BADGES).filter(([name]) => name !== "dots").map(([, spec]) => spec.color);
+  assert.ok(!others.includes(dots.color));
+
+  const circles = [];
+  const ctx = {
+    beginPath() {},
+    arc(x, y, radius) {
+      circles.push({ x, y, radius });
+    },
+    fill() {},
+    set fillStyle(value) {
+      this.color = value;
+    },
+  };
+  dots.draw(ctx, 50, 50, 10);
+  assert.equal(circles.length, 3);
+  assert.ok(circles.every((circle) => circle.y === 50 && circle.radius > 1 && circle.radius < 3));
+  assert.deepEqual(circles.map((circle) => Math.round(circle.x - 50)), [-5, 0, 5]);
+  assert.equal(ctx.color, "#0d0d0d");
+});
+
 test("renderOpenAiIcon rejects unknown badges, bad sizes and a missing canvas", () => {
   assert.throws(() => renderOpenAiIcon({ badge: "nope", canvasModule }), /Unknown icon badge "nope"/);
   assert.throws(() => renderOpenAiIcon({ badge: "toString", canvasModule }), /Unknown icon badge/);
@@ -157,6 +181,7 @@ test("ICON_SPECS maps the key library and every key to a known badge, and the ma
     [`${UUID}.reset-timer`]: "reset",
     [`${UUID}.new-session`]: "newSession",
     [`${UUID}.skill`]: "skill",
+    [`${UUID}.dots`]: "dots",
   });
   for (const [name, spec] of Object.entries(ICON_BADGES)) {
     assert.match(spec.color, /^#[0-9a-f]{6}$/, name);
@@ -174,7 +199,7 @@ test("manifest.json: the plugin and every key use the OpenAI icons, 96x96 PNG da
   const text = fs.readFileSync(MANIFEST, "utf8");
   const manifest = JSON.parse(text);
   const targets = iconTargets(manifest);
-  assert.equal(targets.length, 7);
+  assert.equal(targets.length, 8);
   for (const { target, badge, jsonPath } of targets) {
     const uri = jsonPath.reduce((node, part) => node[part], manifest);
     assert.doesNotMatch(uri, /^mdi\b/, target);
@@ -211,7 +236,7 @@ test("jsonValueSpans locates values by path in the raw text", () => {
   assert.throws(() => jsonValueSpans('{"a": 1} x'), SyntaxError);
 });
 
-test("generate-icons --write replaces exactly the seven icon values and keeps every other byte", (t) => {
+test("generate-icons --write replaces exactly the eight icon values and keeps every other byte", (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "flexbar-icons-"));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const file = path.join(dir, "manifest.json");
@@ -225,15 +250,15 @@ test("generate-icons --write replaces exactly the seven icon values and keeps ev
 
   const write = runGenerator(["--write", "--manifest", file]);
   assert.equal(write.status, 0, write.stderr);
-  assert.match(write.stdout, /wrote 7 icon\(s\)/);
+  assert.match(write.stdout, /wrote 8 icon\(s\)/);
   assert.match(write.stdout, /no icon spec for "com\.example\.other"/);
   const after = fs.readFileSync(file, "utf8");
 
-  // Parsed: only the seven icon fields differ, each now a 96x96 PNG data URI.
+  // Parsed: only the eight icon fields differ, each now a 96x96 PNG data URI.
   const oldJson = JSON.parse(before);
   const newJson = JSON.parse(after);
   const iconPaths = iconTargets(oldJson).map((entry) => entry.jsonPath);
-  assert.equal(iconPaths.length, 7);
+  assert.equal(iconPaths.length, 8);
   for (const jsonPath of iconPaths) {
     const uri = getPath(newJson, jsonPath);
     assert.match(uri, /^data:image\/png;base64,/);
@@ -249,7 +274,7 @@ test("generate-icons --write replaces exactly the seven icon values and keeps ev
   const newLines = after.split("\n");
   assert.equal(newLines.length, oldLines.length);
   const changed = oldLines.flatMap((line, index) => (line === newLines[index] ? [] : [index]));
-  assert.equal(changed.length, 7);
+  assert.equal(changed.length, 8);
   for (const index of changed) {
     const [, prefix, suffix] = /^(\s*"icon": )"[^"]*"(,?)$/.exec(oldLines[index]);
     assert.ok(newLines[index].startsWith(`${prefix}"data:image/png;base64,`), newLines[index].slice(0, 60));
@@ -316,6 +341,7 @@ function fixtureManifest() {
       child("reset-timer", "mdi mdi-timer-sand"),
       child("new-session", "mdi mdi-message-plus-outline"),
       child("skill", "mdi mdi-star-four-points"),
+      child("dots", "mdi mdi-dots-horizontal"),
     ].join(",\n"),
     "        ]",
     "    },",

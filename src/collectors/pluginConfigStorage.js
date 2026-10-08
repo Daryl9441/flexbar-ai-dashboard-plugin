@@ -2,7 +2,12 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
-const { normalizePluginConfig, readPathOverrides } = require("./pathOverrides");
+const {
+  DOTS_STATUS_SOURCES,
+  normalizePluginConfig,
+  readPathOverrides,
+  unwrapPluginConfigPayload,
+} = require("./pathOverrides");
 
 function pluginConfigPath(pluginDirectory) {
   if (!pluginDirectory) return null;
@@ -45,7 +50,13 @@ function mergePluginConfigs(baseConfig, nextConfig) {
     }
   }
 
-  return normalizePluginConfig({ pathOverrides });
+  // A host copy saved before the Dots setting existed keeps the current choice.
+  const nextSource = unwrapPluginConfigPayload(nextConfig).dotsStatusSource;
+  const dotsStatusSource = DOTS_STATUS_SOURCES.includes(nextSource)
+    ? nextSource
+    : normalizePluginConfig(baseConfig).dotsStatusSource;
+
+  return normalizePluginConfig({ pathOverrides, dotsStatusSource });
 }
 
 function loadPluginConfigState(pluginDirectory) {

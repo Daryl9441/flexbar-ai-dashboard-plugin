@@ -21,6 +21,8 @@ const {
   renderTokenUsageKey,
   sessionOverviewLayout,
 } = require("./dashboard/render");
+const { renderDotsKey } = require("./dashboard/dotsRender");
+const { createDotsKeyController } = require("./dashboard/dotsKey");
 const {
   extractDeviceStatuses,
   extractInteractionKey,
@@ -66,7 +68,8 @@ const PLAN_USAGE_CID = "com.aspen.flexbar-ai-dashboard.plan-usage";
 const SKILL_CID = "com.aspen.flexbar-ai-dashboard.skill";
 const RESET_TIMER_CID = "com.aspen.flexbar-ai-dashboard.reset-timer";
 const NEW_SESSION_CID = "com.aspen.flexbar-ai-dashboard.new-session";
-const DASHBOARD_CIDS = new Set([SESSION_CID, TOKEN_USAGE_CID, PLAN_USAGE_CID, RESET_TIMER_CID, SKILL_CID, NEW_SESSION_CID]);
+const DOTS_CID = "com.aspen.flexbar-ai-dashboard.dots";
+const DASHBOARD_CIDS = new Set([SESSION_CID, TOKEN_USAGE_CID, PLAN_USAGE_CID, RESET_TIMER_CID, SKILL_CID, NEW_SESSION_CID, DOTS_CID]);
 const SNACKBAR_MAX_LENGTH = 63;
 const SESSION_INTERVAL_MS = 2_000;
 // Keys that need no AI snapshot (a lone New Codex Session key) still get this
@@ -126,6 +129,15 @@ if (initialPluginConfigState.warning) {
   logger.warn(initialPluginConfigState.warning);
 }
 
+// The ChatGPT Dots keys share one status poller that runs only while one is loaded (src/dashboard/dotsKey.js).
+const dotsKey = createDotsKeyController({
+  getPluginConfig: () => pluginConfig,
+  ready: () => waitForHostPluginConfigSync(),
+  notify,
+  onUpdate: () => drawDashboardKeys(),
+  log: logger,
+});
+
 plugin.on("ui.message", async (payload) => {
   updateHostLanguage(payload);
   // Bounded: a host that never answers getConfig() delays one reply by at most
@@ -162,6 +174,10 @@ plugin.on("ui.message", async (payload) => {
 
   if (payload && payload.type === "setupStatus") {
     return getSetupStatus(collectorOptionsFromConfig(pluginConfig));
+  }
+
+  if (payload && payload.type === "dotsStatus") {
+    return dotsKey.status();
   }
 
   logger.info("Received message from UI:", payload);
@@ -214,6 +230,7 @@ plugin.on("plugin.config.updated", (payload) => {
   pluginConfig = mergePluginConfigs(pluginConfig, payload && (payload.config ?? payload));
   pluginConfigRevision += 1;
   writePluginConfigFile(plugin.directory, pluginConfig);
+  dotsKey.configChanged();
   if (hasSnapshotKeys()) {
     refreshSnapshotInBackground();
     return;
@@ -267,6 +284,7 @@ function applyHostPluginConfig(result, revision) {
   try {
     pluginConfig = mergePluginConfigs(pluginConfig, result.value);
     writePluginConfigFile(plugin.directory, pluginConfig);
+    dotsKey.configChanged();
   } catch (error) {
     hostPluginConfigSynced = false;
     logger.warn("Failed to sync plugin config from host:", error);
@@ -283,6 +301,7 @@ async function savePluginConfig(config) {
   pluginConfig = candidate;
   pluginConfigRevision += 1;
   writePluginConfigFile(plugin.directory, pluginConfig);
+  dotsKey.configChanged();
 
   if (typeof plugin.setConfig === "function") {
     const result = await callHost(
@@ -319,7 +338,9 @@ function handleDeviceStatus(payload) {
   // which redraws them at once; keyDrawCache holds the device's draws until
   // then so each key is drawn once. Redraw after the grace period in case that
   // reload never comes.
-  const reconnected = keyDrawCache.applyDeviceStatuses(extractDeviceStatuses(payload));
+  const statuses = extractDeviceStatuses(payload);
+  dotsKey.applyDeviceStatuses(statuses);
+  const reconnected = keyDrawCache.applyDeviceStatuses(statuses);
   if (reconnected.some(hasDashboardKeysOn)) scheduleReconnectRedraw();
 }
 
@@ -348,6 +369,7 @@ function handleKeysLoaded(payload) {
   // Freshly loaded keys show their default look on the device, so they must
   // be drawn again even if our cache says the content did not change.
   keyDrawCache.markKeysLoaded(serialNumber, keys);
+  dotsKey.deviceConnected(serialNumber);
   const aliveKeys = new Set(keys.map((key) => key.uid));
   let loadedDashboardKey = false;
 
@@ -431,6 +453,11 @@ async function handleKeyInteraction(payload) {
     return;
   }
 
+  if (key.cid === DOTS_CID) {
+    await dotsKey.press(serialNumber, currentLanguage);
+    return;
+  }
+
   if (key.cid === SKILL_CID) {
     const actionKey = keyForAction(key);
     const result = await applySkillInvocation({
@@ -444,6 +471,7 @@ async function handleKeyInteraction(payload) {
 // Runs the 2s snapshot loop while a key needs AI data, otherwise only the slow
 // redraw tick while any dashboard key is loaded, otherwise nothing.
 function syncRefreshLoops() {
+  dotsKey.setActive(hasKeysOfType("dots"));
   if (hasSnapshotKeys()) {
     startSnapshotLoop();
   } else if (snapshotTimer) {
@@ -473,14 +501,14 @@ function refreshSnapshotInBackground() {
 
 function hasSnapshotKeys() {
   for (const item of dashboardKeys.values()) {
-    if (item.type !== "newSession") return true;
+    if (item.type !== "newSession" && item.type !== "dots") return true;
   }
   return false;
 }
 
-function hasSessionKeys() {
+function hasKeysOfType(type) {
   for (const item of dashboardKeys.values()) {
-    if (item.type === "session") return true;
+    if (item.type === type) return true;
   }
   return false;
 }
@@ -532,7 +560,7 @@ async function refreshSnapshot() {
         includeQuota: includeUsage,
       },
       // Only AI Session keys show scheduled tasks; nobody else needs the app's database read.
-      automations: hasSessionKeys(),
+      automations: hasKeysOfType("session"),
     });
     if (includeUsage) {
       usageCache = captureUsageCache(latestSnapshot);
@@ -566,6 +594,8 @@ function drawAllDashboardKeys() {
         drawDefaultSkillKey(serialNumber, key);
       } else if (key.cid === NEW_SESSION_CID) {
         drawNewSessionKey(serialNumber, key);
+      } else if (key.cid === DOTS_CID) {
+        drawDotsKey(serialNumber, key);
       } else {
         drawLoadingKey(serialNumber, key);
       }
@@ -624,6 +654,10 @@ function drawAllDashboardKeys() {
     }
     if (item.type === "newSession") {
       drawNewSessionKey(item.serialNumber, item.key);
+      continue;
+    }
+    if (item.type === "dots") {
+      drawDotsKey(item.serialNumber, item.key);
       continue;
     }
 
@@ -715,6 +749,11 @@ function drawNewSessionKey(serialNumber, key) {
   );
 }
 
+function drawDotsKey(serialNumber, key) {
+  const { view, fallbackTitle } = dotsKey.keyView(key, currentLanguage);
+  drawImageKey(serialNumber, key, view, renderDotsKey, fallbackTitle);
+}
+
 function drawImageKey(serialNumber, key, view, renderer, fallbackTitle) {
   const style = ensureKeyStyle(key);
   style.showIcon = false;
@@ -772,6 +811,7 @@ function dashboardKeyType(cid) {
   if (cid === RESET_TIMER_CID) return "reset";
   if (cid === SKILL_CID) return "skill";
   if (cid === NEW_SESSION_CID) return "newSession";
+  if (cid === DOTS_CID) return "dots";
   return "unknown";
 }
 

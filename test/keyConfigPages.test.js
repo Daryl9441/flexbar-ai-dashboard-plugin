@@ -18,6 +18,7 @@ const PAGE_BADGES = {
   "reset-timer.vue": "reset",
   "new-session.vue": "newSession",
   "skill.vue": "skill",
+  "dots.vue": "dots",
   "global_config.vue": null,
 };
 // The mdi icons the page headers showed before the OpenAI mark.
@@ -126,7 +127,7 @@ test("every config page header shows the OpenAI mark, with its key's badge color
 });
 
 test("key config pages offer no data source choice", () => {
-  for (const fileName of ["session.vue", "token-usage.vue", "plan-usage.vue", "reset-timer.vue", "skill.vue"]) {
+  for (const fileName of ["session.vue", "token-usage.vue", "plan-usage.vue", "reset-timer.vue", "skill.vue", "dots.vue"]) {
     const content = fs.readFileSync(path.join(UI_DIR, fileName), "utf8");
     const component = loadVueComponent(fileName);
     assert.doesNotMatch(content, /dataSource|Data source/, fileName);
@@ -216,6 +217,51 @@ test("new session config page writes project, prompt and mode into full key data
   const cleared = mountConfigComponent(component, { ...model, data: { ...model.data, projectPath: "/x" } });
   cleared.view.projectPath = null;
   assert.equal(latestModel(cleared.emitted).data.projectPath, "");
+});
+
+test("dots config page writes showName into the full key data model", () => {
+  const component = loadVueComponent("dots.vue");
+  const model = {
+    cid: "com.aspen.flexbar-ai-dashboard.dots",
+    title: "ChatGPT Dots",
+    style: {},
+    data: { showName: true },
+  };
+  const page = mountConfigComponent(component, model);
+  assert.equal(page.view.showName, true);
+  page.view.showName = false;
+  const next = latestModel(page.emitted);
+  assert.equal(next.data.showName, false);
+  assert.equal(next.showName, undefined);
+
+  assert.equal(mountConfigComponent(component, { data: {} }).view.showName, true, "names are shown by default");
+  assert.equal(mountConfigComponent(component, { config: { showName: false } }).view.showName, false);
+});
+
+test("dots config page shows a read-only status line built from the state and a time only", async () => {
+  const component = loadVueComponent("dots.vue");
+  const requests = [];
+  const mounted = mountConfigComponent(component, { data: { showName: true } });
+  Object.assign(mounted.view, component.data(), {
+    $fd: {
+      sendToBackend: async (payload) => {
+        requests.push(payload);
+        return { state: "working", degraded: true, source: "cache", updatedAt: Date.now() - 5 * 60_000, name: "should not be shown" };
+      },
+    },
+  });
+  await mounted.view.refreshStatus();
+  assert.deepEqual(JSON.parse(JSON.stringify(requests)), [{ type: "dotsStatus" }]);
+  assert.equal(mounted.view.statusText, "Working · from the app's cache · 5 min ago");
+  assert.equal(mounted.emitted.length, 0, "reading the status never writes the key");
+
+  Object.assign(mounted.view, { $fd: { sendToBackend: async () => { throw new Error("no backend"); } } });
+  await mounted.view.refreshStatus();
+  assert.equal(mounted.view.statusText, "Status unavailable");
+
+  Object.assign(mounted.view, { $fd: { sendToBackend: async () => ({ state: "idle", degraded: false, source: "network", updatedAt: Date.now() - 10_000 }) } });
+  await mounted.view.refreshStatus();
+  assert.equal(mounted.view.statusText, "Idle · from chatgpt.com · just now");
 });
 
 test("session and token usage config pages read settings from nested config models", () => {

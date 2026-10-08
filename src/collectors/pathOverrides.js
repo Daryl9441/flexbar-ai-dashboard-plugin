@@ -3,6 +3,11 @@
 const { expandUserPath, resolveCodexHome } = require("./paths");
 
 /** @type {ReadonlyArray<{ key: string, label: string, description: string, placeholder: (env: NodeJS.ProcessEnv) => string }>} */
+// Where the ChatGPT Dots key reads its status: "auto" asks chatgpt.com (read-only) and falls back to the app's local
+// cache; "local" reads only that cache and never touches the network.
+const DOTS_STATUS_SOURCES = Object.freeze(["auto", "local"]);
+const DEFAULT_DOTS_STATUS_SOURCE = "auto";
+
 const PATH_OVERRIDE_DEFINITIONS = [
   {
     key: "CODEX_HOME",
@@ -51,8 +56,13 @@ function normalizePluginConfig(config) {
 
   return {
     ...rest,
+    dotsStatusSource: normalizeDotsStatusSource(root.dotsStatusSource),
     pathOverrides: normalizedOverrides,
   };
+}
+
+function normalizeDotsStatusSource(value) {
+  return DOTS_STATUS_SOURCES.includes(value) ? value : DEFAULT_DOTS_STATUS_SOURCE;
 }
 
 function envWithPathOverrides(config, baseEnv = process.env) {
@@ -91,10 +101,12 @@ function listPathDefaults(baseEnv = process.env) {
 }
 
 module.exports = {
+  DOTS_STATUS_SOURCES,
   PATH_OVERRIDE_DEFINITIONS,
   collectorOptionsFromConfig,
   envWithPathOverrides,
   listPathDefaults,
+  normalizeDotsStatusSource,
   normalizePluginConfig,
   readPathOverrides,
   unwrapPluginConfigPayload,

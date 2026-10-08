@@ -862,4 +862,11 @@ module.exports = {
   fontSpec,
   quotaColor,
   tokenBarColor,
+  // Drawing helpers for key renderers in their own files (dotsRender.js).
+  STATUS_COLORS,
+  drawBackground,
+  drawHeader,
+  drawStatusLight,
+  drawText,
+  renderKey,
 };

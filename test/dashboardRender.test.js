@@ -21,6 +21,7 @@ const {
   renderTokenUsageKey,
   sessionOverviewLayout,
 } = require("../src/dashboard/render");
+const { renderDotsKey } = require("../src/dashboard/dotsRender");
 
 const NOW = 1_000_000_000_000;
 const RESET_ITEMS = [
@@ -601,6 +602,7 @@ test("real canvas: the mark's pixels are drawn on every Codex key and nothing el
     ["overview 520", renderSessionOverviewKey(OVERVIEW_VIEW, { width: 520, canvasModule }), { x: SESSION_MARK.x, y: 4, size: 16 }, 2],
     ["scheduled tasks 520", renderAutomationOverviewKey(AUTOMATION_VIEW, { width: 520, canvasModule }), { x: SESSION_MARK.x, y: 4, size: 16 }, 2],
     ["no sessions 240", renderSessionOverviewKey({ items: [] }, { width: 240, canvasModule }), { x: SESSION_MARK.x, y: 22, size: 16 }, 2],
+    ["dots", renderDotsKey({ kind: "update", color: "green", hollow: false, paused: false, title: "Update ×2", detail: "3 dots" }, { width: 240, canvasModule }), HEADER_MARK, 2],
   ];
   for (const [name, image, mark, margin] of cases) {
     const key = await decode(image);

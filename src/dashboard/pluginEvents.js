@@ -86,6 +86,12 @@ function newSessionConfigFromKey(key) {
   };
 }
 
+// The Dots key's own settings; everything else about Dots is plugin-wide (the global config page).
+function dotsConfigFromKey(key) {
+  const data = keyConfigFromKey(key);
+  return { showName: data.showName !== false && data.showName !== "false" };
+}
+
 function firstArray(...values) {
   for (const value of values) {
     if (Array.isArray(value)) return value;
@@ -116,7 +122,7 @@ function rootConfigFromKey(key) {
   if (!key || typeof key !== "object" || Array.isArray(key)) return {};
 
   const config = {};
-  for (const name of ["sessionTitleMode", "titleMode", "tokenDisplayMode", "mode", "projectPath", "prompt"]) {
+  for (const name of ["sessionTitleMode", "titleMode", "tokenDisplayMode", "mode", "projectPath", "prompt", "showName"]) {
     if (Object.prototype.hasOwnProperty.call(key, name)) {
       config[name] = key[name];
     }
@@ -125,6 +131,7 @@ function rootConfigFromKey(key) {
 }
 
 module.exports = {
+  dotsConfigFromKey,
   extractDeviceStatuses,
   extractInteractionKey,
   extractLoadedKeys,

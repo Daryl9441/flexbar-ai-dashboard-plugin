@@ -48,8 +48,9 @@ test("global config page persists through FlexDesigner setConfig", async () => {
   await view.applyPathOverrides();
 
   assert.equal(saved.length, 1);
-  assert.deepEqual(Object.keys(saved[0]), ["pathOverrides"]);
+  assert.deepEqual(Object.keys(saved[0]), ["pathOverrides", "dotsStatusSource"]);
   assert.equal(saved[0].pathOverrides.CODEX_HOME, "/custom/codex");
+  assert.equal(saved[0].dotsStatusSource, "auto");
   assert.equal(setConfigCalls.length, 1);
   assert.equal(setConfigCalls[0].pathOverrides.CODEX_HOME, "/custom/codex");
   assert.equal(emitted.length, 1);
@@ -127,7 +128,7 @@ test("global config page reports Codex status only and ignores settings older ve
   // A hosted config that only holds a removed setting falls back to the backend copy.
   await view.loadInitialSettings();
   assert.equal(view.pluginSettings.pathOverrides.CODEX_HOME, "/backend/codex");
-  assert.deepEqual(Object.keys(view.buildConfigPayload()), ["pathOverrides"]);
+  assert.deepEqual(Object.keys(view.buildConfigPayload()), ["pathOverrides", "dotsStatusSource"]);
 
   await view.refresh();
   assert.deepEqual(Array.from(view.statusItems, (item) => item.label), ["Codex home", "Codex auth", "Codex sessions"]);
@@ -155,7 +156,7 @@ test("global config page ignores Claude path overrides older versions saved", as
   }).view;
   await fallback.loadInitialSettings();
   assert.deepEqual(requested, ["getPluginConfig"]);
-  assert.deepEqual(plain(fallback.pluginSettings), { pathOverrides: { CODEX_HOME: "/Users/me/custom-codex" } });
+  assert.deepEqual(plain(fallback.pluginSettings), { pathOverrides: { CODEX_HOME: "/Users/me/custom-codex" }, dotsStatusSource: "auto" });
   assert.deepEqual(plain(fallback.savedPluginSettings), plain(fallback.pluginSettings));
 
   // A hosted Codex override is used as is, without the removed keys.
@@ -166,7 +167,7 @@ test("global config page ignores Claude path overrides older versions saved", as
   }).view;
   await hosted.loadInitialSettings();
   assert.deepEqual(requested, []);
-  assert.deepEqual(plain(hosted.buildConfigPayload()), { pathOverrides: { CODEX_HOME: "/hosted/codex" } });
+  assert.deepEqual(plain(hosted.buildConfigPayload()), { pathOverrides: { CODEX_HOME: "/hosted/codex" }, dotsStatusSource: "auto" });
 
   // Typing the saved value back leaves nothing to apply.
   hosted.pathFields = [{ key: "CODEX_HOME", label: "Codex home", resolved: "/Users/me/.codex", description: "" }];
@@ -174,6 +175,83 @@ test("global config page ignores Claude path overrides older versions saved", as
   assert.equal(hosted.pathOverridesDirty, true);
   hosted.updatePathOverride("CODEX_HOME", "/hosted/codex");
   assert.equal(hosted.pathOverridesDirty, false);
+});
+
+test("global config page saves the Dots status source at once, keeping unsaved path edits", async () => {
+  const component = loadVueComponent("global_config.vue");
+  const saved = [];
+  const setConfigCalls = [];
+  const { view } = mountConfigComponent(component, {
+    async sendToBackend(payload) {
+      if (payload.type === "savePluginConfig") {
+        saved.push(payload.config);
+        return { ok: true, config: payload.config };
+      }
+      return {};
+    },
+    async setConfig(config) {
+      setConfigCalls.push(config);
+    },
+  });
+  view.pathFields = [{ key: "CODEX_HOME", label: "Codex home", resolved: "/Users/me/.codex", description: "" }];
+  view.applyPluginSettings({ pathOverrides: { CODEX_HOME: "/saved/codex" }, dotsStatusSource: "auto" });
+  view.updatePathOverride("CODEX_HOME", "/unsaved/codex");
+  assert.equal(view.dotsStatusSource, "auto");
+
+  await view.updateDotsStatusSource("local");
+
+  assert.deepEqual(plain(saved), [{ pathOverrides: { CODEX_HOME: "/saved/codex" }, dotsStatusSource: "local" }]);
+  assert.deepEqual(plain(setConfigCalls), plain(saved));
+  assert.equal(view.dotsStatusSource, "local");
+  assert.equal(view.savedPluginSettings.dotsStatusSource, "local");
+  assert.equal(view.pluginSettings.pathOverrides.CODEX_HOME, "/unsaved/codex", "the path edit is still pending");
+  assert.equal(view.pathOverridesDirty, true);
+  assert.match(view.dotsSaveMessage, /saved/i);
+
+  // Choosing the saved value again, or something unknown that normalizes to it, sends nothing.
+  await view.updateDotsStatusSource("local");
+  await view.updateDotsStatusSource("bogus");
+  assert.equal(saved.length, 2);
+  assert.equal(saved[1].dotsStatusSource, "auto");
+});
+
+test("global config page reverts the Dots status source when saving fails", async () => {
+  const component = loadVueComponent("global_config.vue");
+  const { view } = mountConfigComponent(component, {
+    async sendToBackend(payload) {
+      if (payload.type === "savePluginConfig") return { ok: false, error: "host did not answer" };
+      return {};
+    },
+  });
+  view.applyPluginSettings({ pathOverrides: { CODEX_HOME: "" }, dotsStatusSource: "auto" });
+  await view.updateDotsStatusSource("local");
+  assert.equal(view.dotsStatusSource, "auto");
+  assert.match(view.error, /host did not answer/);
+});
+
+test("a hosted config that only chose local Dots status is used as is", async () => {
+  const component = loadVueComponent("global_config.vue");
+  const requested = [];
+  const { view } = mountConfigComponent(component, {
+    modelValue: { config: { pathOverrides: { CODEX_HOME: "" }, dotsStatusSource: "local" } },
+    async sendToBackend(payload) {
+      requested.push(payload.type);
+      return { pathOverrides: { CODEX_HOME: "" }, dotsStatusSource: "auto" };
+    },
+  });
+  await view.loadInitialSettings();
+  assert.deepEqual(requested, []);
+  assert.equal(view.dotsStatusSource, "local");
+});
+
+test("global config page explains the Dots status choices", () => {
+  const content = fs.readFileSync(path.join(UI_DIR, "global_config.vue"), "utf8");
+  assert.match(content, /value="auto"/);
+  assert.match(content, /value="local"/);
+  assert.match(content, /read-only/i);
+  assert.match(content, /never refreshes/i);
+  // The app's cache has no room preview: in local mode the key cannot tell that a dot has something new.
+  assert.match(content, /cannot show <strong>Update<\/strong>/);
 });
 
 function plain(value) {

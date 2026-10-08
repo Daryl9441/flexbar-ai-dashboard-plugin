@@ -77,13 +77,26 @@ test("a config.json saved by an older version loads without its removed settings
 
   const { config, warning } = loadPluginConfigState(tempDir);
   assert.equal(warning, null);
-  assert.deepEqual(config, { pathOverrides: { CODEX_HOME: codexHome } });
+  assert.deepEqual(config, { dotsStatusSource: "auto", pathOverrides: { CODEX_HOME: codexHome } });
   assert.equal(getSetupStatus(collectorOptionsFromConfig(config)).codex.codexHome, codexHome);
 
   // The host may still push the old settings; merging drops them too.
   const merged = mergePluginConfigs(config, { config: { overwriteStatusLine: false, pathOverrides: { CLAUDE_CONFIG_DIR: "/x" } } });
-  assert.deepEqual(merged, { pathOverrides: { CODEX_HOME: codexHome } });
+  assert.deepEqual(merged, { dotsStatusSource: "auto", pathOverrides: { CODEX_HOME: codexHome } });
 
   writePluginConfigFile(tempDir, merged);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(tempDir, "config.json"), "utf8")), merged);
+});
+
+test("the Dots status source round-trips and survives a host config that predates it", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "flexbar-plugin-dots-"));
+  writePluginConfigFile(tempDir, { pathOverrides: { CODEX_HOME: "" }, dotsStatusSource: "local" });
+  const { config } = loadPluginConfigState(tempDir);
+  assert.equal(config.dotsStatusSource, "local");
+
+  // An older host copy without the setting keeps the saved choice; a newer one changes it.
+  assert.equal(mergePluginConfigs(config, { pathOverrides: { CODEX_HOME: "" } }).dotsStatusSource, "local");
+  assert.equal(mergePluginConfigs(config, { config: { dotsStatusSource: "auto" } }).dotsStatusSource, "auto");
+  assert.equal(mergePluginConfigs(config, { dotsStatusSource: "bogus" }).dotsStatusSource, "local");
+  assert.equal(mergePluginConfigs({}, {}).dotsStatusSource, "auto");
 });

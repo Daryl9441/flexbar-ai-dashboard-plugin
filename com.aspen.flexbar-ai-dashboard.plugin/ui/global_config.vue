@@ -57,6 +57,33 @@
             Refresh
           </v-btn>
         </div>
+
+        <div class="dots-source mt-5">
+          <div class="text-subtitle-2 mb-1">ChatGPT Dots status</div>
+          <v-btn-toggle
+            :model-value="dotsStatusSource"
+            color="orange"
+            mandatory
+            divided
+            variant="tonal"
+            density="compact"
+            :disabled="savingDots"
+            @update:model-value="updateDotsStatusSource"
+          >
+            <v-btn value="auto">Network + cache</v-btn>
+            <v-btn value="local">Local cache only</v-btn>
+          </v-btn-toggle>
+          <div class="text-caption text-medium-emphasis mt-2">
+            <strong>Network + cache</strong> (default): the Dots key asks chatgpt.com for your dots' status with read-only
+            GET requests (about every 2.5 minutes, at most 60 an hour, through the system proxy), signed in with the Codex
+            login in <code>auth.json</code>. The plugin never refreshes that token; when a request fails or the token has
+            expired, the key keeps its last answer with its age, or shows the ChatGPT app's local cache, marked as such.
+            <strong>Local cache only</strong>: no network at all; the key reads only the app's local cache, which the app
+            updates while it is in the foreground, so it may be hours old. That cache holds only your primary dot and no
+            unread information, so in this mode the key cannot show <strong>Update</strong>.
+          </div>
+          <div v-if="dotsSaveMessage" class="text-caption text-medium-emphasis mt-1">{{ dotsSaveMessage }}</div>
+        </div>
       </v-card-text>
 
       <v-expansion-panels variant="accordion" class="mt-2">
@@ -138,6 +165,8 @@
 // The path overrides this version has. Older versions also saved Claude Code
 // ones; they are ignored so they neither pick the settings source nor mark the form dirty.
 const PATH_OVERRIDE_KEYS = ["CODEX_HOME"];
+// Where the ChatGPT Dots key reads its status (plugin-wide; see src/collectors/pathOverrides.js).
+const DOTS_STATUS_SOURCES = ["auto", "local"];
 
 function setConfigPageClass(enabled) {
   if (typeof document !== "undefined" && document.body) {
@@ -157,12 +186,14 @@ export default {
     return {
       busy: false,
       savingPaths: false,
+      savingDots: false,
+      dotsSaveMessage: "",
       error: "",
       status: {},
       snapshot: null,
       pathFields: [],
-      pluginSettings: { pathOverrides: {} },
-      savedPluginSettings: { pathOverrides: {} },
+      pluginSettings: { pathOverrides: {}, dotsStatusSource: "auto" },
+      savedPluginSettings: { pathOverrides: {}, dotsStatusSource: "auto" },
       pathValidationErrors: {},
       pathSaveMessage: "",
       settingsLoaded: false,
@@ -188,7 +219,11 @@ export default {
       return normalized;
     },
     pathOverridesDirty() {
-      return JSON.stringify(this.pluginSettings) !== JSON.stringify(this.savedPluginSettings);
+      // The Dots status source is saved on its own (updateDotsStatusSource).
+      return JSON.stringify(this.pluginSettings.pathOverrides || {}) !== JSON.stringify(this.savedPluginSettings.pathOverrides || {});
+    },
+    dotsStatusSource() {
+      return normalizeDotsSource(this.pluginSettings.dotsStatusSource);
     },
     statusItems() {
       const codex = this.status.codex || {};
@@ -235,8 +270,9 @@ export default {
     applyPluginSettings(config) {
       const root = isObject(config) ? config : {};
       const overrides = knownPathOverrides(root.pathOverrides);
-      this.pluginSettings = { pathOverrides: { ...overrides } };
-      this.savedPluginSettings = { pathOverrides: { ...overrides } };
+      const dotsStatusSource = normalizeDotsSource(root.dotsStatusSource);
+      this.pluginSettings = { pathOverrides: { ...overrides }, dotsStatusSource };
+      this.savedPluginSettings = { pathOverrides: { ...overrides }, dotsStatusSource };
       this.settingsLoaded = true;
       this.pathValidationErrors = {};
       this.pathSaveMessage = "";
@@ -244,7 +280,7 @@ export default {
     hasStoredSettings(config) {
       if (!isObject(config)) return false;
       const overrides = knownPathOverrides(config.pathOverrides);
-      return PATH_OVERRIDE_KEYS.some((key) => overrides[key]);
+      return PATH_OVERRIDE_KEYS.some((key) => overrides[key]) || config.dotsStatusSource === "local";
     },
     async loadInitialSettings() {
       const hosted = isObject(this.modelValue && this.modelValue.config)
@@ -263,6 +299,7 @@ export default {
         pathOverrides: isObject(settings.pathOverrides)
           ? { ...settings.pathOverrides }
           : {},
+        dotsStatusSource: normalizeDotsSource(settings.dotsStatusSource),
       };
     },
     async commitPluginConfig(config) {
@@ -312,6 +349,33 @@ export default {
         await this.refresh();
       } finally {
         this.savingPaths = false;
+      }
+    },
+    // Saved as soon as it is picked, with the saved path overrides (not the ones still being edited).
+    async updateDotsStatusSource(value) {
+      const next = normalizeDotsSource(value);
+      const saved = normalizeDotsSource(this.savedPluginSettings.dotsStatusSource);
+      this.pluginSettings = { ...this.pluginSettings, dotsStatusSource: next };
+      if (next === saved) return;
+
+      this.savingDots = true;
+      this.dotsSaveMessage = "";
+      const candidate = this.buildConfigPayload({ ...this.savedPluginSettings, dotsStatusSource: next });
+      try {
+        const result = await this.$fd.sendToBackend({ type: "savePluginConfig", config: candidate });
+        if (result && result.ok === false) throw new Error(result.error || "Failed to save plugin settings");
+        const config = (result && result.config) || candidate;
+        await this.commitPluginConfig(config);
+        const source = normalizeDotsSource(config.dotsStatusSource);
+        this.savedPluginSettings = { ...this.savedPluginSettings, dotsStatusSource: source };
+        this.pluginSettings = { ...this.pluginSettings, dotsStatusSource: source };
+        this.error = "";
+        this.dotsSaveMessage = "Dots status source saved.";
+      } catch (error) {
+        this.pluginSettings = { ...this.pluginSettings, dotsStatusSource: saved };
+        this.error = error && error.message ? error.message : String(error);
+      } finally {
+        this.savingDots = false;
       }
     },
     updatePathOverride(key, value) {
@@ -376,6 +440,10 @@ function knownPathOverrides(value) {
     known[key] = typeof overrides[key] === "string" ? overrides[key] : "";
   }
   return known;
+}
+
+function normalizeDotsSource(value) {
+  return DOTS_STATUS_SOURCES.includes(value) ? value : "auto";
 }
 
 function errorsByField(errors) {

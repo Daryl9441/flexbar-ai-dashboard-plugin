@@ -30,3 +30,12 @@ test("normalizePluginConfig drops legacy HOME override key", () => {
   assert.equal(config.pathOverrides.HOME, undefined);
   assert.equal(config.pathOverrides.CODEX_HOME, "/tmp/codex");
 });
+
+test("normalizePluginConfig keeps a valid Dots status source and defaults it to auto", () => {
+  assert.equal(normalizePluginConfig({}).dotsStatusSource, "auto");
+  assert.equal(normalizePluginConfig({ dotsStatusSource: "local" }).dotsStatusSource, "local");
+  assert.equal(normalizePluginConfig({ config: { dotsStatusSource: "local" } }).dotsStatusSource, "local");
+  assert.equal(normalizePluginConfig({ dotsStatusSource: "LOCAL" }).dotsStatusSource, "auto");
+  assert.equal(normalizePluginConfig({ dotsStatusSource: "off" }).dotsStatusSource, "auto");
+  assert.equal(normalizePluginConfig({ dotsStatusSource: 1 }).dotsStatusSource, "auto");
+});

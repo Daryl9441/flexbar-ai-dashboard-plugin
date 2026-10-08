@@ -172,7 +172,7 @@ test("a narrow key shows only the light and the title", () => {
 });
 
 test("faces built by the view render in both languages, and a missing face shows loading", () => {
-  const state = { source: "auto", network: { dots: [{ id: "a", name: "Test Dot", available: true, unread: true }], activity: {}, at: NOW }, cache: null, error: null, signedOut: null };
+  const state = { source: "auto", network: { dots: [{ id: "a", name: "Test Dot", available: true, unread: true }], activity: { a: 0 }, at: NOW }, cache: null, error: null, signedOut: null };
   const zh = fakeCanvas();
   renderDotsKey(buildDotsFace(state, { now: NOW, language: "zh" }), { width: 240, language: "zh", canvasModule: zh });
   assert.ok(textOf(zh, "有新进展"));

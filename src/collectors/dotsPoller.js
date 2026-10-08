@@ -251,6 +251,8 @@ class DotsPoller {
       this.#patch({ network: Object.freeze({ ...network, activity: { ...network.activity, [dot.id]: result.inProgress } }) });
       return null;
     }
+    const network = this.#state.network;
+    this.#patch({ network: Object.freeze({ ...network, activity: { ...network.activity, [dot.id]: null } }) });
     if (result.category === "rateLimited" || AUTH_GATES.has(result.category)) return this.#applyFailure(result, credentials);
     return null;
   }

@@ -187,7 +187,7 @@ test("a freshly rewritten state file does not replace the last answer after one 
   write(home, globalState({ "primary-aeon-selection-v1": primary() }), STATE_FILE, now - 10_000);
   const cache = createDotsLocalCache().read({ codexHome: home, accountId: ACCOUNT });
   const dot = (id, unread) => ({ id, name: DOT_NAME, available: true, paused: false, safety: false, unread, latestAt: null, lastCheckInAt: null });
-  const network = { dots: [dot(TBO_ID, true), dot("tbo~test-0002", false)], activity: {}, noAccess: false, at: now - 150_000 };
+  const network = { dots: [dot(TBO_ID, true), dot("tbo~test-0002", false)], activity: { [TBO_ID]: 0, "tbo~test-0002": 0 }, noAccess: false, at: now - 150_000 };
   const state = { source: "auto", network, cache, error: { category: "network", at: now - 5_000 }, signedOut: null };
 
   const face = buildDotsFace(state, { now, language: "en" });
@@ -210,7 +210,7 @@ test("another account's cache is discarded; an unknown account is accepted", (t)
     "primary-aeon-selection-v1": primary(),
     "orbit-activity-snapshots-v1": snapshots([{ accountId: OTHER_ACCOUNT, statuses: ["in_progress"] }]),
   }), STATE_FILE, Date.UTC(2026, 9, 8, 11, 5, 0));
-  assert.deepEqual(cache.read({ codexHome: home, accountId: ACCOUNT }).activity, { [TBO_ID]: 0 }, "another account's activity is ignored");
+  assert.deepEqual(cache.read({ codexHome: home, accountId: ACCOUNT }).activity, { [TBO_ID]: null }, "another account's activity is ignored");
 });
 
 test("a cached 'no dot' answer and a missing selection are told apart", (t) => {

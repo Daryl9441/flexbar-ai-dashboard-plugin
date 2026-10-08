@@ -345,3 +345,7 @@ test/              Node test runner tests
 - The plugin reads local Codex data and does not upload session logs. The network requests it sends itself are the plan-usage query to ChatGPT with the `auth.json` token, when `codex app-server` does not report the rate limits (see [Codex Data](#codex-data)), and, while a ChatGPT Dots key is loaded, the read-only Dots status requests (see [ChatGPT Dots](#chatgpt-dots--chatgpt-dots-按键)); **Local cache only** on the settings page turns the latter off.
 - The ChatGPT app's scheduled-task database is only ever opened read-only.
 - The Codex OAuth token is used locally only for reading plan usage and the Dots status, and is never refreshed by the plugin. Tests cover that the token is not exposed.
+
+Dots runtime status is derived only from Dots profiles and activities, never Codex sessions. Priority: safety, working, paused, unknown activity, unread update, idle. Missing or failed activity reads do not imply idle.
+
+Dots 运行状态只依据 Dots 自身的信息，不使用 Codex 会话状态。工作中和已暂停优先于未读进展；活动数据缺失或请求失败时显示状态未知，不冒充空闲。

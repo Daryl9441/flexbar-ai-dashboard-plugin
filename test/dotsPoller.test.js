@@ -294,7 +294,7 @@ test("any other activity failure keeps the list answer and the normal interval",
   const h = harness({ activity: () => ({ ok: false, category: "network", status: null, retryAfterMs: null }) });
   await h.poller.start();
   assert.equal(h.poller.getState().error, null);
-  assert.deepEqual(h.poller.getState().network.activity, {});
+  assert.deepEqual(h.poller.getState().network.activity, { "tbo~test-0001": null });
   assert.deepEqual(h.clock.pending(), [150_000]);
 });
 

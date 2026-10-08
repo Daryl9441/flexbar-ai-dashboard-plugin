@@ -15,7 +15,7 @@ function dot(id, overrides = {}) {
 }
 
 function network(dots, activity = {}, extra = {}) {
-  return { dots, activity, noAccess: false, at: NOW - MINUTE, ...extra };
+  return { dots, activity: { ...Object.fromEntries(dots.map(dot => [dot.id, 0])), ...activity }, noAccess: false, at: NOW - MINUTE, ...extra };
 }
 
 function state(changes = {}) {
@@ -24,20 +24,20 @@ function state(changes = {}) {
 
 const face = (value, options = {}) => buildDotsFace(value, { now: NOW, language: "en", ...options });
 
-test("state priority: safety > update > working > paused > idle", () => {
+test("state priority: safety > working > paused > update > idle", () => {
   const all = [
     dot("s", { safety: true }),
-    dot("u", { unread: true }),
     dot("w"),
     dot("p", { paused: true }),
+    dot("u", { unread: true }),
     dot("i"),
   ];
   const activity = { w: 2 };
   const expected = [
     [DOTS_FACE.SAFETY, "orange"],
-    [DOTS_FACE.UPDATE, "green"],
     [DOTS_FACE.WORKING, "blue"],
     [DOTS_FACE.PAUSED, "gray"],
+    [DOTS_FACE.UPDATE, "green"],
     [DOTS_FACE.IDLE, "gray"],
   ];
   for (let index = 0; index < expected.length; index += 1) {
@@ -97,12 +97,12 @@ test("loading and signed-out faces", () => {
   assert.deepEqual([loading.kind, loading.title, loading.hollow], [DOTS_FACE.LOADING, "Loading...", true]);
   assert.equal(face(null).kind, DOTS_FACE.LOADING);
 
-  const signedOut = face(state({ signedOut: "missing", cache: { dots: [dot("a")], activity: {}, updatedAt: NOW } }));
+  const signedOut = face(state({ signedOut: "missing", cache: { dots: [dot("a")], activity: { a: 0 }, updatedAt: NOW } }));
   assert.deepEqual([signedOut.kind, signedOut.title, signedOut.detail], [DOTS_FACE.SIGNED_OUT, "Sign in", "Sign in to the ChatGPT app"]);
 });
 
 test("before the first answer the app's cache is shown, hollow and marked as cache", () => {
-  const cache = { dots: [dot("a", { paused: true })], activity: {}, updatedAt: NOW - 8 * MINUTE };
+  const cache = { dots: [dot("a", { paused: true })], activity: { a: 0 }, updatedAt: NOW - 8 * MINUTE };
   const result = face(state({ cache }));
   assert.equal(result.kind, DOTS_FACE.PAUSED);
   assert.equal(result.hollow, true);
@@ -142,7 +142,7 @@ test("one failed request does not swap a newer answer for older cached data", ()
   // Two dots, one with an unread update, answered 3 minutes ago; the next request timed out. The app's cache holds
   // only the primary dot, without its room, as of 89 minutes ago (however recently the file itself was written).
   const answer = network([dot("a", { unread: true }), dot("b")], {}, { at: NOW - 3 * MINUTE });
-  const cache = { dots: [dot("a")], activity: {}, updatedAt: NOW - 89 * MINUTE };
+  const cache = { dots: [dot("a")], activity: { a: 0 }, updatedAt: NOW - 89 * MINUTE };
   const result = face(state({ network: answer, cache, error: { category: "network", at: NOW - 30_000 } }));
   assert.deepEqual(
     [result.kind, result.color, result.hollow, result.detail, result.source, result.updatedAt],
@@ -154,7 +154,7 @@ test("one failed request does not swap a newer answer for older cached data", ()
 });
 
 test("a cache of unknown age says 'Cache' without an age", () => {
-  const cache = { dots: [dot("a")], activity: {}, updatedAt: null };
+  const cache = { dots: [dot("a")], activity: { a: 0 }, updatedAt: null };
   const offline = face(state({ cache, error: { category: "network", at: NOW } }));
   assert.deepEqual([offline.kind, offline.detail, offline.source, offline.updatedAt], [DOTS_FACE.IDLE, "Offline · Cache", "cache", null]);
   assert.equal(face(state({ source: "local", cache })).detail, "Dot a · Cache");
@@ -180,13 +180,13 @@ test("an answer older than 10 minutes without a newer error is shown as stale", 
 });
 
 test("local mode shows only the cache, or says it has none", () => {
-  const cache = { dots: [dot("a")], activity: {}, updatedAt: NOW - 2 * HOUR };
+  const cache = { dots: [dot("a")], activity: { a: 0 }, updatedAt: NOW - 2 * HOUR };
   const fromCache = face(state({ source: "local", cache, network: network([dot("a", { unread: true })]) }));
   assert.deepEqual([fromCache.kind, fromCache.hollow, fromCache.detail], [DOTS_FACE.IDLE, true, "Dot a · Cache 2h"]);
 
   const empty = face(state({ source: "local" }));
   assert.deepEqual([empty.kind, empty.title, empty.detail], [DOTS_FACE.DEGRADED, "No local data", "Open ChatGPT to refresh"]);
-  const noDot = face(state({ source: "local", cache: { dots: [], activity: {}, updatedAt: NOW } }));
+  const noDot = face(state({ source: "local", cache: { dots: [], activity: { a: 0 }, updatedAt: NOW } }));
   assert.equal(noDot.kind, DOTS_FACE.NONE);
   assert.equal(noDot.hollow, true);
 });
@@ -223,4 +223,17 @@ test("every Dots string exists in both languages and snackbar texts fit the host
     for (const key of ["dotsOpening", "dotsOpenedWeb", "dotsOpenFailed"]) assert.ok(t(language, key).length <= 63, key);
   }
   assert.notEqual(t("zh", "dotsWorking"), t("en", "dotsWorking"));
+});
+
+ test("Dots activity wins over unread messages and ignores Codex session state", () => {
+  const input = state({ network: network([dot("a", { unread: true })], { a: 1 }), codex: { state: "idle" } });
+  assert.equal(face(input).kind, DOTS_FACE.WORKING);
+  input.network.activity.a = 0;
+  input.codex.state = "working";
+  assert.equal(face(input).kind, DOTS_FACE.UPDATE);
+});
+test("missing activity is unknown rather than idle or an unread update", () => {
+  const input = state({ network: network([dot("a", { unread: true })], { a: null }) });
+  assert.equal(face(input).kind, DOTS_FACE.UNKNOWN);
+  assert.equal(buildDotsFace(input, { now: NOW, language: "zh" }).title, "状态未知");
 });

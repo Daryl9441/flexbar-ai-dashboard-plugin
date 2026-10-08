@@ -128,7 +128,7 @@ function selectForAccount(extracted, accountId) {
     const snapshot = extracted.snapshots.find((entry) =>
       entry.tboId === dot.id && (!accountId || !entry.accountId || entry.accountId === accountId)
     );
-    activity[dot.id] = snapshot ? snapshot.inProgress : 0;
+    activity[dot.id] = snapshot ? snapshot.inProgress : null;
   }
   return { dots, activity, updatedAt: extracted.updatedAt };
 }

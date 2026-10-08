@@ -147,7 +147,7 @@ test("only a changed Codex home or status source refreshes at once", async () =>
 test("each key renders the shared state with its own name setting", () => {
   const state = {
     source: "auto",
-    network: { dots: [{ id: TBO_ID, name: DOT_NAME, available: true, unread: false, lastCheckInAt: NOW - 3_600_000 }], activity: {}, at: NOW },
+    network: { dots: [{ id: TBO_ID, name: DOT_NAME, available: true, unread: false, lastCheckInAt: NOW - 3_600_000 }], activity: { [TBO_ID]: 0 }, at: NOW },
     cache: null,
     error: null,
     signedOut: null,
@@ -178,7 +178,7 @@ test("status changes are logged once each, with counts and categories only", asy
   const { dots, logs } = controller({ poller });
   const state = {
     source: "auto",
-    network: { dots: [{ id: TBO_ID, name: DOT_NAME, available: true }], activity: {}, at: NOW },
+    network: { dots: [{ id: TBO_ID, name: DOT_NAME, available: true }], activity: { [TBO_ID]: 0 }, at: NOW },
     cache: null,
     error: null,
     signedOut: null,

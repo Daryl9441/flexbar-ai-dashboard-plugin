@@ -1,7 +1,7 @@
 "use strict";
 
 // What the ChatGPT Dots key shows, from the poller's state (pure: no I/O, no clock of its own).
-// Priority across the available dots: safety > update > working > paused > idle; several dots in the leading state
+// Priority across the available dots: safety > working > paused > unknown > update > idle; several dots in the leading state
 // read "×n". Data that is not a fresh backend answer (the app's cache, an answer from before a failed request, or
 // one older than 10 minutes) gets a hollow light and says why: "Offline · Cache 5m". After a failed request the last
 // answer stays, unless the app's cache holds data it had after that answer; a cache of unknown age reads "Cache".
@@ -18,14 +18,16 @@ const DOTS_FACE = Object.freeze({
   WORKING: "working",
   PAUSED: "paused",
   IDLE: "idle",
+  UNKNOWN: "unknown",
 });
 const STALE_AFTER_MS = 10 * 60_000;
 const SEPARATOR = " · ";
 const PRIORITY = Object.freeze([
   { kind: DOTS_FACE.SAFETY, label: "dotsSafety", color: "orange", test: (dot) => dot.safety },
-  { kind: DOTS_FACE.UPDATE, label: "dotsUpdate", color: "green", test: (dot) => dot.unread },
   { kind: DOTS_FACE.WORKING, label: "dotsWorking", color: "blue", test: (dot, activity) => Number(activity[dot.id]) > 0 },
   { kind: DOTS_FACE.PAUSED, label: "dotsPaused", color: "gray", test: (dot) => dot.paused },
+  { kind: DOTS_FACE.UNKNOWN, label: "dotsUnknown", color: "gray", test: (dot, activity) => !Number.isFinite(activity[dot.id]) },
+  { kind: DOTS_FACE.UPDATE, label: "dotsUpdate", color: "green", test: (dot) => dot.unread },
   { kind: DOTS_FACE.IDLE, label: "dotsIdle", color: "gray", test: () => true },
 ]);
 const REASON_LABELS = Object.freeze({

@@ -170,7 +170,7 @@ test("dashboard does not count a running session the collector could not read as
   assert.equal(statusOf({ state: "unknown", detail: "no session events" }), "finished-unread");
 });
 
-test("dashboard plan usage exposes remaining percentages for 5h and weekly windows", () => {
+test("dashboard plan usage selects only the weekly remaining percentage", () => {
   const model = buildDashboardViewModel({
     providers: {
       codex: {
@@ -190,7 +190,6 @@ test("dashboard plan usage exposes remaining percentages for 5h and weekly windo
     usedPercent: item.usedPercent,
     remainingPercent: item.remainingPercent,
   })), [
-    { label: "5h", usedPercent: 8, remainingPercent: 92 },
     { label: "Weekly", usedPercent: 35, remainingPercent: 65 },
   ]);
 });
@@ -344,14 +343,14 @@ test("plan usage and reset timer name windows by their real length, not by prima
   assert.deepEqual(zh.planUsage.items.map((item) => item.label), ["\u6bcf\u5468"]);
 });
 
-test("plan usage stays neutral when a window's length is unknown", () => {
+test("plan usage excludes windows of unknown length", () => {
   const model = buildDashboardViewModel({
     providers: {
       codex: { sessions: [], quota: { limits: [{ label: "primary", usedPercent: 40, resetAt: 1778696068 }] } },
     },
   }, createDashboardState(), { sessionSlots: 0, language: "zh" });
 
-  assert.deepEqual(model.planUsage.items.map((item) => item.label), ["\u7528\u91cf"]);
+  assert.deepEqual(model.planUsage.items, []);
   assert.deepEqual(model.resetTimer.items.map((item) => [item.label, item.windowSeconds]), [["\u7528\u91cf", null]],
     "the countdown is still shown; the ring needs a window length");
 });
@@ -390,7 +389,7 @@ test("windows of different lengths under the same name are kept apart", () => {
     },
   }, createDashboardState(), { sessionSlots: 0 });
 
-  assert.deepEqual(model.planUsage.items.map((item) => [item.label, item.usedPercent]), [["5h", 12], ["Weekly", 50]]);
+  assert.deepEqual(model.planUsage.items.map((item) => [item.label, item.usedPercent]), [["Weekly", 50]]);
 });
 
 test("quota windows merge by length: copies collapse, a copy without a length joins its named window", () => {
@@ -410,8 +409,8 @@ test("quota windows merge by length: copies collapse, a copy without a length jo
     },
   }, createDashboardState(), { sessionSlots: 0 });
 
-  assert.deepEqual(model.planUsage.items.map((item) => [item.label, item.usedPercent]), [["5h", 40], ["Weekly", 70]],
-    "one item per window length, shortest first, highest usage kept");
+  assert.deepEqual(model.planUsage.items.map((item) => [item.label, item.usedPercent]), [["Weekly", 70]],
+    "one weekly item, highest usage kept");
 });
 
 test("named window lengths only match whole tokens", () => {
@@ -427,9 +426,58 @@ test("plan usage normalizes seconds, milliseconds and ISO reset times and preser
   const ms = Date.parse("2026-10-10T12:30:00Z");
   for (const [resetAt, expected] of [[ms / 1000, ms], [ms, ms], ["2026-10-10T12:30:00Z", ms], ["bad", null], [null, null], [undefined, null]]) {
     const model = buildDashboardViewModel({ providers: { codex: { sessions: [], quota: { limits: [
-      { label: "primary", usedPercent: 35, windowSeconds: 18000, resetAt },
+      { label: "primary", usedPercent: 35, windowSeconds: 604800, resetAt },
     ] } } } }, createDashboardState(), { sessionSlots: 0 });
     assert.equal(model.planUsage.items[0].resetAtMs, expected);
     assert.equal(model.planUsage.items[0].remainingPercent, 65);
+  }
+});
+
+test("plan usage does not replace missing weekly data with a short or monthly window", () => {
+  for (const windowSeconds of [18000, 86400, 30 * 86400]) {
+    const model = buildDashboardViewModel({ providers: { codex: { quota: { limits: [
+      { label: "primary", usedPercent: 20, windowSeconds, resetAt: 1791590443 },
+    ] } } } }, createDashboardState(), { sessionSlots: 0 });
+    assert.deepEqual(model.planUsage.items, []);
+    assert.equal(model.planUsage.label, "unknown");
+    assert.equal(model.resetTimer.items.length, 1, "the separate reset timer still keeps all windows");
+  }
+});
+
+
+test("weekly reset without valid usage is unavailable instead of 100 percent remaining", () => {
+  for (const usedPercent of [undefined, null, NaN, Infinity, "", " ", "invalid", false]) {
+    const model = buildDashboardViewModel({ providers: { codex: { quota: { limits: [
+      { label: "primary", usedPercent, windowSeconds: 604800, resetAt: 1791590443 },
+    ] } } } }, createDashboardState(), { sessionSlots: 0 });
+    assert.deepEqual(model.planUsage.items, []);
+    assert.equal(model.resetTimer.items.length, 1, "a known reset still appears in the separate timer");
+  }
+});
+
+test("a real zero usage wins over an invalid duplicate and inherits its weekly window", () => {
+  for (const usedPercent of [undefined, null, "bad"]) {
+    const model = buildDashboardViewModel({ providers: { codex: { quota: { limits: [
+      { label: "primary", usedPercent, windowSeconds: 604800, resetAt: 1791590443 },
+      { label: "codex.primary", usedPercent: 0, resetAt: 1791590443 },
+    ] } } } }, createDashboardState(), { sessionSlots: 0 });
+    assert.deepEqual(model.planUsage.items.map(item => [item.label, item.remainingPercent]), [["Weekly", 100]]);
+  }
+});
+
+
+test("complementary weekly copies retain the reset when the valid usage copy has none", () => {
+  for (const reverse of [false, true]) {
+    for (const resetAt of [undefined, "bad"]) {
+      const limits = [
+        { label: "primary", usedPercent: null, windowSeconds: 604800, resetAt: 1791590443 },
+        { label: "codex.primary", usedPercent: 0, resetAt },
+      ];
+      if (reverse) limits.reverse();
+      const model = buildDashboardViewModel({ providers: { codex: { quota: { limits } } } }, createDashboardState(), { sessionSlots: 0 });
+      assert.equal(model.planUsage.items[0].remainingPercent, 100);
+      assert.equal(model.planUsage.items[0].resetAtMs, 1791590443000);
+      assert.equal(model.resetTimer.items[0].resetAtMs, 1791590443000);
+    }
   }
 });

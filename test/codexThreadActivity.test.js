@@ -143,7 +143,8 @@ test("a newest line larger than the byte window does not empty the tail", (t) =>
   assert.equal(inferCodexActivity(events, now).state, "waiting");
 
   // Larger than the largest window: no complete line at all, still an open turn.
-  const mtimeMs = now - 2_000;
+  // Whole seconds survive filesystem timestamp precision on every platform.
+  const mtimeMs = Math.floor(now / 1000) * 1000 - 2_000;
   const giant = writeJsonl(path.join(dir, "giant.jsonl"), [
     event(at(20_000), "task_started"),
     output(at(2_000), "c1", 9 * MB),

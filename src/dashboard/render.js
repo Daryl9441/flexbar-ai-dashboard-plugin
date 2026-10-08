@@ -116,6 +116,7 @@ function renderTokenUsageChartKey(view, options = {}) {
 
 function renderPlanUsageKey(view, options = {}) {
   const language = normalizeLanguage(options.language);
+  const now = Number.isFinite(options.now) ? options.now : Date.now();
   return renderKey(options, (ctx, width, canvasModule) => {
     drawBackground(ctx, width);
     drawHeader(ctx, view.title || t(language, "planUsageTitle"), width, canvasModule);
@@ -139,24 +140,48 @@ function renderPlanUsageKey(view, options = {}) {
     const widestLabel = Math.max(...items.map((item) => ctx.measureText(String(item.label || "")).width));
     const labelWidth = Math.min(72, Math.max(42, Math.ceil(widestLabel) + 4));
     const barX = 10 + labelWidth;
-    const barWidth = Math.max(40, percentRight - percentWidth - percentGap - barX);
+    const barWidth = percentRight - percentWidth - percentGap - barX;
+    const showBar = barWidth >= 32;
     items.forEach((item, index) => {
-      const y = 25 + index * 17;
+      const y = 20 + index * 21;
       drawText(ctx, item.label, 10, y + 8, {
         font: fontSpec("normal", 11),
         color: "#f4f4f5",
         maxWidth: labelWidth - 2,
       });
-      drawRoundedRect(ctx, barX, y, barWidth, 9, 4, "#27272a");
-      drawRoundedRect(ctx, barX, y, Math.round(barWidth * (item.remainingPercent / 100)), 9, 4, quotaColor(item.remainingPercent));
+      if (showBar) {
+        drawRoundedRect(ctx, barX, y, barWidth, 7, 3, "#27272a");
+        drawRoundedRect(ctx, barX, y, Math.round(barWidth * (item.remainingPercent / 100)), 7, 3, quotaColor(item.remainingPercent));
+      }
       drawText(ctx, `${item.remainingPercent}%`, percentRight, y + 8, {
         font: fontSpec("bold", 12),
         align: "right",
         color: "#f4f4f5",
         maxWidth: percentWidth,
       });
+      drawText(ctx, planResetLabel(item.resetAtMs, now, language), 10, y + 17, {
+        font: fontSpec("normal", 9),
+        color: "#a1a1aa",
+        maxWidth: width - 18,
+      });
     });
   });
+}
+
+// Absolute local time per quota window. Never infer a new reset from a stale one.
+function planResetLabel(resetAtMs, now, language) {
+  const prefix = t(language, "planResets");
+  if (!Number.isFinite(resetAtMs) || resetAtMs <= 0 || !Number.isFinite(new Date(resetAtMs).getTime())) {
+    return `${prefix} —`;
+  }
+  if (resetAtMs <= now) return t(language, "planResetPending");
+  const reset = new Date(resetAtMs);
+  const current = new Date(now);
+  const pad = (n) => String(n).padStart(2, "0");
+  const time = `${pad(reset.getHours())}:${pad(reset.getMinutes())}`;
+  const date = `${pad(reset.getMonth() + 1)}/${pad(reset.getDate())}`;
+  const year = reset.getFullYear() === current.getFullYear() ? "" : `${reset.getFullYear()}/`;
+  return `${prefix} ${year}${date} ${time}`;
 }
 
 function renderResetTimerKey(view, options = {}) {

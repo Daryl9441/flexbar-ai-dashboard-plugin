@@ -434,6 +434,7 @@ function quotaItems(quota, language) {
       usedPercent,
       remainingPercent: clampPercent(100 - usedPercent),
       resetAt: limit.resetAt,
+      resetAtMs: toEpochMs(limit.resetAt),
     };
   });
 }

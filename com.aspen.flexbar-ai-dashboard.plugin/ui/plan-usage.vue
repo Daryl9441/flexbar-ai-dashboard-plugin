@@ -1,7 +1,7 @@
 <template>
   <div class="key-config">
     <v-card class="mx-auto key-card" max-width="720" variant="flat" color="transparent">
-      <v-card-item title="Plan Usage" subtitle="Shows how much of each Codex plan usage window remains." class="px-0 py-1">
+      <v-card-item title="Plan Usage" subtitle="Remaining quota and next reset for each window (local time)." class="px-0 py-1">
         <template #prepend>
           <!-- The OpenAI mark (OpenAI's trademark; path and source in src/dashboard/openaiLogo.js), as on the key-library icon; it only identifies the data source. -->
           <span class="openai-key-icon openai-key-icon--badged" style="--badge-color: #22c55e" aria-hidden="true">

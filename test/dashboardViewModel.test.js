@@ -422,3 +422,14 @@ test("named window lengths only match whole tokens", () => {
   assert.equal(namedQuotaWindowSeconds("gpt-5high"), null);
   assert.equal(namedQuotaWindowSeconds("primary"), null);
 });
+
+test("plan usage normalizes seconds, milliseconds and ISO reset times and preserves unknown", () => {
+  const ms = Date.parse("2026-10-10T12:30:00Z");
+  for (const [resetAt, expected] of [[ms / 1000, ms], [ms, ms], ["2026-10-10T12:30:00Z", ms], ["bad", null], [null, null], [undefined, null]]) {
+    const model = buildDashboardViewModel({ providers: { codex: { sessions: [], quota: { limits: [
+      { label: "primary", usedPercent: 35, windowSeconds: 18000, resetAt },
+    ] } } } }, createDashboardState(), { sessionSlots: 0 });
+    assert.equal(model.planUsage.items[0].resetAtMs, expected);
+    assert.equal(model.planUsage.items[0].remainingPercent, 65);
+  }
+});

@@ -124,7 +124,7 @@ test("plan usage percent labels sit outside progress bars", () => {
   }, { width: 280, canvasModule: fake });
 
   const percent = fake.textDraws.find((text) => text.text === "92%");
-  const bar = fake.roundedRects.find((rect) => rect.color === "#27272a" && rect.y === 25);
+  const bar = fake.roundedRects.find((rect) => rect.color === "#27272a" && rect.y === 20);
 
   assert.ok(bar);
   assert.ok(percent);
@@ -833,3 +833,46 @@ function createFakeCanvasModule(options = {}) {
   };
   return module;
 }
+
+test("plan usage shows each window's reset in local time with the correct quota", () => {
+  const fake = createFakeCanvasModule();
+  const now = new Date(2026, 9, 8, 12, 0).getTime();
+  renderPlanUsageKey({ items: [
+    { label: "5h", remainingPercent: 92, resetAtMs: new Date(2026, 9, 8, 16, 5).getTime() },
+    { label: "Weekly", remainingPercent: 65, resetAtMs: new Date(2026, 9, 12, 9, 30).getTime() },
+  ] }, { width: 280, now, canvasModule: fake });
+  for (const text of ["92%", "65%", "Resets 10/08 16:05", "Resets 10/12 09:30"]) {
+    assert.ok(fake.textDraws.some(draw => draw.text === text), text);
+  }
+  const resets = fake.textDraws.filter(draw => draw.text.startsWith("Resets"));
+  assert.deepEqual(resets.map(draw => draw.y), [37, 58]);
+});
+
+test("plan usage distinguishes missing, invalid and elapsed reset times in both languages", () => {
+  const now = new Date(2026, 9, 8, 12).getTime();
+  for (const language of ["en", "zh-CN"]) {
+    for (const resetAtMs of [undefined, null, NaN, 0, 1e100, now, now - 1]) {
+      const fake = createFakeCanvasModule();
+      renderPlanUsageKey({ items: [{ label: "5h", remainingPercent: 60, resetAtMs }] }, { width: 240, now, language, canvasModule: fake });
+      const past = resetAtMs === now || resetAtMs === now - 1;
+      const expected = language === "en" ? (past ? "Reset pending" : "Resets —") : (past ? "等待刷新" : "重置 —");
+      assert.ok(fake.textDraws.some(draw => draw.text === expected), `${language}: ${resetAtMs}`);
+    }
+  }
+});
+
+test("plan usage reset labels stay inside narrow keys and show the year across New Year", () => {
+  const now = new Date(2026, 11, 31, 12).getTime();
+  for (const width of [120, 150, 200, 280]) {
+    const fake = createFakeCanvasModule();
+    renderPlanUsageKey({ items: [{ label: "Monthly", remainingPercent: 100, resetAtMs: new Date(2027, 0, 1, 8).getTime() }] }, { width, now, canvasModule: fake });
+    assert.ok(fake.textDraws.some(draw => draw.text === "100%"));
+    const reset = fake.textDraws.find(draw => draw.text.startsWith("Resets"));
+    assert.ok(reset);
+    assert.ok(reset.x + fake.measureTextWidth(reset.text) <= width - 8);
+    if (width >= 280) assert.equal(reset.text, "Resets 2027/01/01 08:00");
+    for (const bar of fake.roundedRects.filter(rect => rect.color === "#27272a")) {
+      assert.ok(bar.x + bar.width < width - 52, "bar does not overlap the percentage");
+    }
+  }
+});
